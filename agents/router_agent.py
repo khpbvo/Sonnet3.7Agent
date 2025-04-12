@@ -6,10 +6,10 @@ import os
 import sys
 import asyncio
 from typing import Dict, List, Optional, Any, Tuple, Union
-import anthropic
+from anthropic import Anthropic
 import json
 
-from ..config import Config
+from config import Config
 
 
 class RouterAgent:

@@ -9,8 +9,8 @@ from typing import Dict, List, Optional, Any, Tuple
 import difflib
 import re
 
-from anthropic.types import Tool, ToolUseBlock
-
+#from anthropic import Tool, ToolUseBlock
+from anthropic import Tool, ToolUseBlock
 
 def register_file_tools() -> List[Tool]:
     """

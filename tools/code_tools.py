@@ -8,8 +8,7 @@ import asyncio
 import re
 from typing import Dict, List, Optional, Any, Tuple
 
-from anthropic.types import Tool
-
+from anthropic import Tool, ToolUseBlock
 
 def register_code_tools() -> List[Tool]:
     """

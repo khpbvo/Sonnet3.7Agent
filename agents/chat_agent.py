@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any, Callable, Union
 import anthropic
 from anthropic.types import ContentBlock, ContentBlockDeltaEvent, TextDelta, MessageParam, MessageStreamEvent
 
-from ..config import Config
+from config import Config
 
 
 class ChatAgent:
