@@ -48,23 +48,28 @@ class FileManager:
         
         try:
             # Try primary encoding first
-            async with asyncio.to_thread(open, filepath, 'r', encoding='utf-8') as file:
-                content = await asyncio.to_thread(file.read)
-                
-            # Cache the file
-            self.conversation_manager.add_loaded_file(filepath, content)
-            return content
-            
-        except UnicodeDecodeError:
-            # Try fallback encoding
+            file_obj = await asyncio.to_thread(lambda: open(filepath, 'r', encoding='utf-8'))
             try:
-                async with asyncio.to_thread(open, filepath, 'r', encoding='latin-1') as file:
-                    content = await asyncio.to_thread(file.read)
-                    
+                content = await asyncio.to_thread(file_obj.read)
                 # Cache the file
                 self.conversation_manager.add_loaded_file(filepath, content)
                 return content
+            finally:
+                await asyncio.to_thread(file_obj.close)
                 
+        except UnicodeDecodeError:
+            # Try fallback encoding
+            try:
+                file_obj = await asyncio.to_thread(lambda: open(filepath, 'r', encoding='latin-1'))
+                try:
+                    content = await asyncio.to_thread(file_obj.read)
+                    
+                    # Cache the file
+                    self.conversation_manager.add_loaded_file(filepath, content)
+                    return content
+                finally:
+                    await asyncio.to_thread(file_obj.close)
+                    
             except Exception as e:
                 raise IOError(f"Cannot read file: {str(e)}")
     

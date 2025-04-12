@@ -178,37 +178,40 @@ IMPORTANT: ONLY return JSON - no explanations, markdown, or other text.
             Command data or None if not a command
         """
         try:
-            # Extract JSON from response (in case there's text around it)
-            json_match = response_text.strip()
+            response_json = json.loads(response_text)
             
-            # Sometimes Claude adds markdown code blocks
-            if json_match.startswith('```json') and json_match.endswith('```'):
-                json_match = json_match[7:-3].strip()
-            elif json_match.startswith('```') and json_match.endswith('```'):
-                json_match = json_match[3:-3].strip()
-            
-            data = json.loads(json_match)
-            
-            if not data.get('is_command', False):
+            if not response_json.get('is_command', False):
                 return None
                 
-            # If inferred command has high confidence, return it
-            command_data = {
-                'command_type': data.get('command_type', 'unknown'),
-                'command': data.get('command', ''),
-                'args': data.get('args', []),
-                'confidence': data.get('confidence', 0.0)
+            command_type = response_json.get('command_type', '')
+            command = response_json.get('command', '')
+            args = response_json.get('args', [])
+            confidence = response_json.get('confidence', 0.0)
+            
+            # For inferred commands, handle natural language inference
+            if command_type == 'inferred':
+                # Check if the command already starts with 'code:' to avoid duplication
+                if not command.startswith('code:'):
+                    command = f'code:{command}'
+                    
+                original_query = response_json.get('original_query', '')
+                return {
+                    'command_type': command_type,
+                    'command': command,
+                    'args': args,
+                    'confidence': confidence,
+                    'original_query': original_query
+                }
+            
+            return {
+                'command_type': command_type,
+                'command': command,
+                'args': args,
+                'confidence': confidence
             }
             
-            # Add original query for inferred commands
-            if data.get('command_type') == 'inferred' and 'original_query' in data:
-                command_data['original_query'] = data['original_query']
-                
-            return command_data
-            
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"Error parsing router response: {str(e)}", file=sys.stderr)
-            print(f"Response: {response_text}", file=sys.stderr)
+            print(f"Error parsing router response: {str(e)}")
             return None
     
     def _get_available_commands(self) -> List[Dict[str, str]]:
