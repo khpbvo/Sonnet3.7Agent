@@ -6,7 +6,7 @@ import os
 import sys
 import asyncio
 from typing import Dict, List, Optional, Any, Tuple, Union
-from anthropic import Anthropic
+import anthropic
 import json
 
 from config import Config
@@ -26,7 +26,12 @@ class RouterAgent:
             api_key: Anthropic API key
             config: Application configuration
         """
-        self.client = anthropic.AsyncClient(api_key=api_key)
+        # Create the client with the API key directly
+        # Debug to make sure we have an API key
+        if not api_key:
+            print("Warning: No API key provided to RouterAgent")
+            
+        self.client = anthropic.Anthropic(api_key=api_key)
         self.config = config
         self.available_commands = self._get_available_commands()
     
@@ -62,12 +67,17 @@ class RouterAgent:
         
         try:
             # Make API call to Claude to determine if input is a command
-            response = await self.client.messages.create(
+            response = self.client.messages.create(
                 model=self.config.router_model,
                 max_tokens=self.config.router_max_tokens,
                 system=router_prompt,
                 messages=[
-                    {"role": "user", "content": user_input}
+                    {
+                        "role": "user", 
+                        "content": [
+                            {"type": "text", "text": user_input}
+                        ]
+                    }
                 ]
             )
             
@@ -151,7 +161,7 @@ IMPORTANT: ONLY return JSON - no explanations, markdown, or other text.
         
         if hasattr(response, 'content') and response.content:
             for content_block in response.content:
-                if hasattr(content_block, 'text') and content_block.text:
+                if content_block.type == "text":
                     text_content += content_block.text
         
         return text_content

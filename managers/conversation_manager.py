@@ -42,6 +42,7 @@ class ConversationManager:
             role: Message role (user, assistant, system)
             content: Message content
         """
+        # Format content according to Messages API format
         message = {"role": role, "content": content}
         est_tokens = self._count_tokens(content)
         
@@ -209,7 +210,7 @@ class ConversationManager:
         """
         return (self.token_count / self.max_tokens) * 100
         
-    async def extract_system_message(self) -> Tuple[Optional[str], List[Dict[str, str]]]:
+    async def extract_system_message(self) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """
         Extract the system message from the conversation history.
         
@@ -224,6 +225,31 @@ class ConversationManager:
                 # Keep the latest system message
                 system_message = msg["content"]
             else:
+                # Ensure message format is correct
                 regular_messages.append(msg)
                 
         return system_message, regular_messages
+
+    def format_messages_for_api(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Format messages for the Anthropic API.
+        
+        Args:
+            messages: List of message dictionaries
+            
+        Returns:
+            Formatted messages for the API
+        """
+        formatted_messages = []
+        for msg in messages:
+            content = msg["content"]
+            # Format content as an array with text type if it's a string
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            
+            formatted_messages.append({
+                "role": msg["role"],
+                "content": content
+            })
+        
+        return formatted_messages

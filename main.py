@@ -27,6 +27,9 @@ from tools.code_tools import CodeTools, register_code_tools
 # Import utilities
 from utils.terminal_utils import get_multiline_input, print_colored, create_stream_callback
 
+# Import Anthropic SDK
+import anthropic
+
 
 async def process_command(command_data: Dict[str, Any], app_context: Dict[str, Any]) -> str:
     """
@@ -295,6 +298,32 @@ async def main():
     api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         api_key = input("Enter your Anthropic API key: ").strip()
+    
+    # Set the API key in environment as well for Anthropic SDK
+    os.environ["ANTHROPIC_API_KEY"] = api_key
+    
+    # Print debug info about the API key (masked for security)
+    if api_key:
+        masked_key = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "****"
+        print(f"Using API key: {masked_key}")
+    else:
+        print("Warning: No API key provided")
+    
+    # Test the API connection directly
+    try:
+        print("Testing API connection...")
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-3-7-sonnet-20250219",
+            max_tokens=10,
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+            ]
+        )
+        print("API connection successful!")
+    except Exception as e:
+        print(f"API connection test failed: {str(e)}")
+        # Continue anyway to allow troubleshooting
     
     # Initialize configuration
     config = Config()

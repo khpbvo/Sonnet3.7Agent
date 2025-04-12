@@ -10,7 +10,7 @@ class Config:
         # Claude API settings
         self.model = "claude-3-7-sonnet-20250219"  # Most recent model as of the provided date
         self.max_context_tokens = 200000
-        self.max_response_tokens = 4096
+        self.max_response_tokens = 64000
         
         # Application settings
         self.stream_responses = True
@@ -22,5 +22,5 @@ class Config:
         self.fallback_encoding = "latin-1"
         
         # Router settings
-        self.router_model = "claude-3-7-sonnet-20250219"  # Could use a smaller model if needed
+        self.router_model = "claude-3-5-haiku-20241022"  # Could use a smaller model if needed
         self.router_max_tokens = 1000

@@ -7,7 +7,6 @@ import sys
 import asyncio
 from typing import Dict, List, Optional, Any, Callable, Union
 import anthropic
-from anthropic.types import ContentBlock, ContentBlockDeltaEvent, TextDelta, MessageParam, MessageStreamEvent
 
 from config import Config
 
@@ -27,7 +26,12 @@ class ChatAgent:
             config: Application configuration
             conversation_manager: Manager for conversation history
         """
-        self.client = anthropic.AsyncClient(api_key=api_key)
+        # Create the client with the API key directly
+        # Debug to make sure we have an API key
+        if not api_key:
+            print("Warning: No API key provided to ChatAgent")
+            
+        self.client = anthropic.Anthropic(api_key=api_key)
         self.config = config
         self.conversation_manager = conversation_manager
     
@@ -53,36 +57,41 @@ class ChatAgent:
         
         try:
             # Extract system message and regular messages
-            system_message, messages = await self.conversation_manager.extract_system_message()
+            system_message, message_objs = await self.conversation_manager.extract_system_message()
+            
+            # Format messages correctly for the Messages API
+            formatted_messages = self.conversation_manager.format_messages_for_api(message_objs)
             
             # Prepare thinking parameters if enabled
-            thinking_params = {"type": "enabled", "budget_tokens": 16000} if thinking_enabled else None
+            thinking = {"type": "enabled", "budget_tokens": 16000} if thinking_enabled else None
             
             complete_response = ""
             
             # Stream the response if needed
             if stream_callback:
-                async with self.client.messages.stream(
+                with self.client.messages.stream(
                     model=self.config.model,
                     max_tokens=self.config.max_response_tokens,
                     system=system_message,
-                    messages=messages,
-                    thinking=thinking_params
+                    messages=formatted_messages,
+                    thinking=thinking
                 ) as stream:
-                    async for event in stream:
-                        if isinstance(event, ContentBlockDeltaEvent) and event.delta and isinstance(event.delta, TextDelta):
-                            chunk_text = event.delta.text
-                            if chunk_text:
-                                complete_response += chunk_text
-                                stream_callback(chunk_text)
+                    for event in stream:
+                        # Handle content block deltas for stream events
+                        if hasattr(event, 'type') and event.type == "content_block_delta":
+                            if hasattr(event, 'delta') and hasattr(event.delta, 'text'):
+                                chunk_text = event.delta.text
+                                if chunk_text:
+                                    complete_response += chunk_text
+                                    stream_callback(chunk_text)
             else:
                 # Non-streaming response
-                response = await self.client.messages.create(
+                response = self.client.messages.create(
                     model=self.config.model,
                     max_tokens=self.config.max_response_tokens,
                     system=system_message,
-                    messages=messages,
-                    thinking=thinking_params
+                    messages=formatted_messages,
+                    thinking=thinking
                 )
                 
                 # Extract text from the response
@@ -113,7 +122,7 @@ class ChatAgent:
         
         if hasattr(response, 'content') and response.content:
             for content_block in response.content:
-                if hasattr(content_block, 'text') and content_block.text:
+                if content_block.type == "text":
                     text_content += content_block.text
         
         return text_content

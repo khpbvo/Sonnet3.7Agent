@@ -9,8 +9,30 @@ from typing import Dict, List, Optional, Any, Tuple
 import difflib
 import re
 
-#from anthropic import Tool, ToolUseBlock
-from anthropic import Tool, ToolUseBlock
+# Updated imports for the latest Anthropic SDK
+import json
+import anthropic
+
+# Define a simple Tool class without relying on anthropic.types.Tool
+class Tool:
+    def __init__(self, name, description, input_schema):
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+        
+    def to_dict(self):
+        """Convert to dictionary format expected by Anthropic API"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema
+        }
+
+# Define our own ToolUseBlock class 
+class ToolUseBlock:
+    def __init__(self, name, input):
+        self.name = name
+        self.input = input
 
 def register_file_tools() -> List[Tool]:
     """

@@ -8,7 +8,12 @@ import asyncio
 import re
 from typing import Dict, List, Optional, Any, Tuple
 
-from anthropic import Tool, ToolUseBlock
+# Updated imports for the latest Anthropic SDK
+import json
+import anthropic
+
+# Import the Tool class from file_tools to reuse the implementation
+from tools.file_tools import Tool, ToolUseBlock
 
 def register_code_tools() -> List[Tool]:
     """
