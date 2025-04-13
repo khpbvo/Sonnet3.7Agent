@@ -269,30 +269,48 @@ class FileTools:
     async def _handle_read_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle read_file tool.
-        
+    
         Args:
             params: Tool parameters
-            
+        
         Returns:
             Tool response
         """
-        path = params.get('path')
-        encoding = params.get('encoding', 'utf-8')
-        
+        # Get path parameter, handling different input formats
+        path = None
+        if isinstance(params, dict):
+            path = params.get('path')
+        elif isinstance(params, str):
+            # Handle case where the entire params is just the path string
+            path = params
+    
+        print(f"[DEBUG] Read file params: {params}")
+        print(f"[DEBUG] Extracted path: {path}")
+    
         if not path:
             return {"error": "Missing required parameter: path"}
-        
+    
         try:
+            print(f"[DEBUG] Attempting to read file: {path}")
+            absolute_path = self.file_manager._get_absolute_path(path)
+            print(f"[DEBUG] Absolute path: {absolute_path}")
+        
+            # Check if file exists
+            if not os.path.exists(absolute_path):
+                return {"error": f"File not found: {absolute_path}"}
+        
             content = await self.file_manager.read_file(path)
             return {
                 "content": content,
-                "encoding": encoding,
+                "encoding": "utf-8",
                 "path": path,
-                "size_bytes": len(content.encode(encoding))
+                "size_bytes": len(content.encode('utf-8'))
             }
         except FileNotFoundError:
             return {"error": f"File not found: {path}"}
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return {"error": f"Error reading file: {str(e)}"}
     
     async def _handle_write_file(self, params: Dict[str, Any]) -> Dict[str, Any]:

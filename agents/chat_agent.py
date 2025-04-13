@@ -53,15 +53,15 @@ class ChatAgent:
         """
         self.tools = tools
         self.tool_handlers = tool_handlers
-        
+
         if self.debug_mode:
             print(f"Registered {len(tools)} tools:")
             for tool in tools:
                 print(f"  - {tool.name}: {tool.description}")
-    
+
     async def send_message(
-        self, 
-        message: str, 
+        self,
+        message: str,
         stream_callback: Optional[Callable[[str], None]] = None,
         thinking_enabled: bool = True
     ) -> Optional[str]:
@@ -84,10 +84,10 @@ class ChatAgent:
                 for char in result:
                     stream_callback(char)
             return result
-        
+
         # Add user message to conversation
         self.conversation_manager.add_message("user", message)
-        
+
         try:
             # Extract system message and regular messages
             system_message, message_objs = await self.conversation_manager.extract_system_message()
@@ -123,6 +123,7 @@ class ChatAgent:
                     # Track if we need to handle any tool calls
                     tool_calls = []
                     current_tool_call = None
+                    current_tool_input = ""  # Add this to collect the full tool input
                     
                     for event in stream:
                         # Handle different event types
@@ -130,6 +131,8 @@ class ChatAgent:
                             # Debug each event
                             if self.debug_mode:
                                 print(f"[DEBUG] Event type: {event.type}")
+                                if hasattr(event, 'delta') and self.debug_mode:
+                                    print(f"[DEBUG] Event delta: {event.delta}")
                             
                             # Content block events - regular text responses
                             if event.type == "content_block_delta":
@@ -139,72 +142,89 @@ class ChatAgent:
                                         complete_response += chunk_text
                                         stream_callback(chunk_text)
                             
-                            # Tool call events
+                            # Tool call events handling - carefully collect the full input
                             elif event.type == "tool_call_start":
                                 if self.debug_mode:
                                     print(f"\n[DEBUG] 🔧 Tool call started: {event.tool_call.name}")
                                 
                                 current_tool_call = {
                                     "name": event.tool_call.name,
-                                    "input": "",
+                                    "input": "",  # Will collect input incrementally
                                     "id": event.tool_call.id
                                 }
+                                current_tool_input = ""  # Reset the input collector
+                            
                             elif event.type == "tool_call_delta":
-                                if current_tool_call and hasattr(event.delta, 'input'):
-                                    current_tool_call["input"] += event.delta.input
+                                if current_tool_call and hasattr(event, 'delta') and hasattr(event.delta, 'input'):
+                                    current_tool_input += event.delta.input
+                                    current_tool_call["input"] = current_tool_input
+                                    if self.debug_mode:
+                                        print(f"[DEBUG] Tool input chunk: {event.delta.input}")
+                            
                             elif event.type == "tool_call_end":
                                 if current_tool_call:
-                                    # Parse the JSON input
                                     try:
-                                        input_data = current_tool_call["input"]
-                                        if isinstance(input_data, str):
-                                            try:
-                                                input_data = json.loads(input_data)
-                                                current_tool_call["input"] = input_data
-                                            except:
-                                                # If it's not valid JSON, keep it as a string
-                                                pass
-                                        
                                         if self.debug_mode:
                                             print(f"[DEBUG] 🔧 Tool call completed: {current_tool_call['name']}")
-                                            print(f"[DEBUG] 📝 Tool parameters: {json.dumps(current_tool_call['input'], indent=2)}")
+                                            print(f"[DEBUG] 📝 Raw tool input: {current_tool_input}")
+                                        
+                                        if current_tool_input.strip().startswith('{'):
+                                            try:
+                                                parsed_input = json.loads(current_tool_input)
+                                                current_tool_call["input"] = parsed_input
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 📝 Parsed JSON input: {json.dumps(parsed_input, indent=2)}")
+                                            except json.JSONDecodeError as e:
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] ⚠️ JSON parsing error: {str(e)}")
+                                                current_tool_call["input"] = current_tool_input
+                                        else:
+                                            current_tool_call["input"] = current_tool_input
                                     except Exception as e:
                                         if self.debug_mode:
-                                            print(f"[DEBUG] ⚠️ Error parsing tool input: {str(e)}")
-                                        
+                                            print(f"[DEBUG] ⚠️ Error processing tool input: {str(e)}")
+                                            import traceback
+                                            traceback.print_exc()
+                                    
                                     tool_calls.append(current_tool_call)
                                     current_tool_call = None
-                
-                # Handle tool calls after streaming is complete
-                if tool_calls:
-                    if self.debug_mode:
-                        print(f"\n[DEBUG] 🧰 Processing {len(tool_calls)} tool calls")
+                                    current_tool_input = ""
                     
-                    # Process each tool call
-                    tool_results = []
-                    for tool_call in tool_calls:
-                        self.tool_call_history.append(tool_call)
-                        result = await self._handle_tool_call(tool_call)
-                        tool_results.append({
-                            "tool_call_id": tool_call.get("id"),
-                            "output": json.dumps(result)
-                        })
-                        
+                    # Handle tool calls after streaming is complete
+                    if tool_calls:
                         if self.debug_mode:
-                            print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
-                    
-                    # Call Claude again with the tool results
-                    if self.debug_mode:
-                        print("[DEBUG] 🔄 Sending tool results back to Claude")
-                    
-                    additional_response = await self._send_tool_results(tool_results, formatted_messages)
-                    if additional_response:
-                        stream_callback("\n\n")
-                        for chunk in additional_response.splitlines():
-                            stream_callback(chunk + "\n")
-                        complete_response += "\n\n" + additional_response
+                            print(f"\n[DEBUG] 🧰 Processing {len(tool_calls)} tool calls")
+                        
+                        tool_results = []
+                        for tool_call in tool_calls:
+                            self.tool_call_history.append(tool_call)
+                            
+                            if self.debug_mode:
+                                print(f"[DEBUG] 🔧 Executing tool: {tool_call['name']}")
+                                print(f"[DEBUG] 📝 Tool parameters: {json.dumps(tool_call['input'], indent=2)}")
+                            
+                            result = await self._handle_tool_call(tool_call)
+                            tool_results.append({
+                                "tool_call_id": tool_call.get("id"),
+                                "output": json.dumps(result)
+                            })
+                            
+                            if self.debug_mode:
+                                print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
+                        
+                        if tool_results:
+                            if self.debug_mode:
+                                print("[DEBUG] 🔄 Sending tool results back to Claude")
+                                print(f"[DEBUG] Tool results: {json.dumps(tool_results, indent=2)}")
+                            
+                            additional_response = await self._send_tool_results(tool_results, formatted_messages)
+                            if additional_response:
+                                stream_callback("\n\n")
+                                for chunk in additional_response.splitlines():
+                                    stream_callback(chunk + "\n")
+                                complete_response += "\n\n" + additional_response
+                    return None
             else:
-                # Non-streaming response
                 response = self.client.messages.create(
                     model=self.config.model,
                     max_tokens=self.config.max_response_tokens,
@@ -214,19 +234,15 @@ class ChatAgent:
                     thinking=thinking
                 )
                 
-                # Extract text from the response
                 text_content = self._extract_text_from_response(response)
                 complete_response = text_content
                 
-                # Handle tool calls if any
                 if hasattr(response, 'tool_calls') and response.tool_calls:
                     if self.debug_mode:
                         print(f"\n[DEBUG] 🧰 Processing {len(response.tool_calls)} tool calls")
                     
-                    # Process each tool call
                     tool_results = []
                     for tool_call in response.tool_calls:
-                        # Parse the input if it's a string
                         input_data = tool_call.input
                         if isinstance(input_data, str):
                             try:
@@ -256,7 +272,6 @@ class ChatAgent:
                         if self.debug_mode:
                             print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
                     
-                    # Call Claude again with the tool results
                     if tool_results:
                         if self.debug_mode:
                             print("[DEBUG] 🔄 Sending tool results back to Claude")
@@ -264,12 +279,11 @@ class ChatAgent:
                         additional_response = await self._send_tool_results(tool_results, formatted_messages)
                         if additional_response:
                             complete_response += "\n\n" + additional_response
-            
-            # Add the complete response to conversation history
-            if complete_response:
-                self.conversation_manager.add_message("assistant", complete_response)
-            
-            return complete_response if not stream_callback else None
+                
+                if complete_response:
+                    self.conversation_manager.add_message("assistant", complete_response)
+                
+                return complete_response
             
         except Exception as e:
             error_msg = f"Error in send_message: {str(e)}"
@@ -277,24 +291,25 @@ class ChatAgent:
             import traceback
             traceback.print_exc()
             return f"Error: {str(e)}"
-    
+
     async def _send_tool_results(self, tool_results, previous_messages):
         """
         Send tool results back to Claude for further processing.
-        
+    
         Args:
             tool_results: List of tool results
             previous_messages: Previously formatted messages
-            
+        
         Returns:
             Claude's response after processing tool results
         """
         try:
             system_message, _ = await self.conversation_manager.extract_system_message()
-            
+        
             if self.debug_mode:
                 print(f"[DEBUG] Sending {len(tool_results)} tool results to Claude")
-            
+                print(f"[DEBUG] Tool results: {json.dumps(tool_results, indent=2)}")
+        
             response = self.client.messages.create(
                 model=self.config.model,
                 max_tokens=self.config.max_response_tokens,
@@ -302,9 +317,14 @@ class ChatAgent:
                 messages=previous_messages,
                 tool_results=tool_results
             )
+        
+            # Extract and debug the response
+            text_content = self._extract_text_from_response(response)
+            if self.debug_mode:
+                print(f"[DEBUG] Claude response after tool results: {text_content[:100]}...")
             
-            return self._extract_text_from_response(response)
-            
+            return text_content
+        
         except Exception as e:
             print(f"Error sending tool results: {str(e)}", file=sys.stderr)
             import traceback
@@ -314,38 +334,53 @@ class ChatAgent:
     async def _handle_tool_call(self, tool_call):
         """
         Handle a tool call from Claude.
-        
+    
         Args:
             tool_call: Tool call information
-            
+        
         Returns:
             Tool call result
         """
         tool_name = tool_call.get('name')
         tool_input = tool_call.get('input', {})
-        
+    
+        # Ensure tool_input is a dictionary
+        if isinstance(tool_input, str):
+            try:
+                tool_input = json.loads(tool_input)
+            except json.JSONDecodeError:
+                # Handle special cases for string inputs
+                if tool_name == "read_file":
+                    # Try to convert string input to a path parameter
+                    tool_input = {"path": tool_input.strip()}
+                # Add other tool-specific string input handling as needed
+    
         # Find the appropriate handler
         handler = self.tool_handlers.get(tool_name)
-        
+    
         if not handler:
             error_msg = f"No handler found for tool: {tool_name}"
             if self.debug_mode:
                 print(f"[DEBUG] ❌ {error_msg}")
                 print(f"[DEBUG] Available handlers: {list(self.tool_handlers.keys())}")
             return {"error": error_msg}
-        
+    
         try:
             # Call the handler with the tool input
             if self.debug_mode:
                 print(f"[DEBUG] 🛠️ Executing tool: {tool_name}")
-            
+                print(f"[DEBUG] 📝 Tool parameters: {json.dumps(tool_input, indent=2)}")
+        
             result = await handler.handle_tool_use({
                 "name": tool_name,
                 "input": tool_input
             })
-            
+        
+            if self.debug_mode:
+                print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
+        
             return result
-            
+        
         except Exception as e:
             error_msg = f"Error handling tool call: {str(e)}"
             if self.debug_mode:
@@ -357,7 +392,7 @@ class ChatAgent:
     async def _handle_slash_command(self, command):
         """
         Handle a slash command.
-        
+    
         Args:
             command: Command string (without the leading slash)
             
@@ -390,13 +425,13 @@ class ChatAgent:
     def _show_tools_command(self):
         """
         Show available tools.
-        
+    
         Returns:
             Tool information
         """
         if not self.tools:
             return "No tools registered."
-        
+    
         tools_info = "Available tools:\n\n"
         for tool in self.tools:
             tools_info += f"- {tool.name}: {tool.description}\n"
@@ -410,7 +445,7 @@ class ChatAgent:
                     tools_info += f"    - {param_name}: {param_info.get('description', 'No description')} ({required}){default}\n"
             
             tools_info += "\n"
-        
+    
         return tools_info
     
     def _show_tool_history(self):

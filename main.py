@@ -169,6 +169,10 @@ async def main():
         'apply_changes': code_tools,
         'analyze_code': code_tools
     }
+    # Print registered tools for debugging
+    print("Registered tool handlers:")
+    for tool_name, handler in tool_handlers.items():
+        print(f"  - {tool_name}: {type(handler).__name__}")
     
     # Initialize the enhanced chat agent with direct access to file_manager and debug mode
     debug_mode = args.debug
