@@ -36,33 +36,26 @@ class RouterAgent:
         self.available_commands = self._get_available_commands()
     
     async def route_input(self, user_input: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-        """
-        Determine whether the input is a command or chat message.
-        
-        Args:
-            user_input: Raw user input
-            
-        Returns:
-            Tuple of (route_type, command_data) where route_type is either 'command' or 'chat',
-            and command_data contains command details if it's a command
-        """
-        # Direct routing for slash commands and explicit command syntax (without using Claude)
+        # Direct routing for slash commands and explicit command syntax
         if user_input.startswith('/'):
             command = user_input[1:].strip()
             return 'command', {'command_type': 'slash', 'command': command, 'args': []}
-            
+        
         elif user_input.lower().startswith('code:'):
             parts = user_input.split(':', 2)
-            
+        
             if len(parts) < 2:
                 return 'command', {'command_type': 'invalid', 'error': 'Invalid command format'}
-                
+            
             subcommand = parts[1].lower()
             args = parts[2].split(':') if len(parts) > 2 else []
-                
+            
+            # Debug to confirm direct command processing
+            print(f"Processing direct command - type: code, command: {subcommand}, args: {args}")
+            
             return 'command', {'command_type': 'code', 'command': subcommand, 'args': args}
-        
-        # Use Claude for more complex command understanding
+    
+        # Only use Claude for actual natural language, not direct commands
         router_prompt = self._create_router_prompt(user_input)
         
         try:
@@ -98,29 +91,43 @@ class RouterAgent:
     def _create_router_prompt(self, user_input: str) -> str:
         """
         Create a prompt for the router agent.
-        
+    
         Args:
             user_input: Raw user input
-            
+        
         Returns:
             Router prompt
         """
         commands_description = "\n".join([f"- {cmd['name']}: {cmd['description']}" for cmd in self.available_commands])
-        
+    
         return f"""You are a command router for an AI coding assistant. Your job is to determine if user input should be treated as a command or regular chat message.
 
 Available Commands:
 {commands_description}
 
+IMPORTANT: There are ONLY THREE possible command types:
+1. "slash" - Commands that start with / (e.g., /help, /exit)
+2. "code" - Commands that explicitly start with code: (e.g., code:read:file.py)
+3. "inferred" - Natural language that implies a command (e.g., "please read file.py" → code:read:file.py)
+
 Instructions:
 1. Analyze the user input and determine if it matches one of the available commands.
 2. Return ONLY valid JSON in the following format:
    
-   For command matches:
+   For slash commands:
    {{
      "is_command": true,
-     "command_type": "<command_type>",
-     "command": "<specific_command>",
+     "command_type": "slash",
+     "command": "<command_without_slash>",
+     "args": [],
+     "confidence": <0.0-1.0>
+   }}
+   
+   For explicit code commands:
+   {{
+     "is_command": true,
+     "command_type": "code",
+     "command": "<subcommand>",
      "args": ["<arg1>", "<arg2>", ...],
      "confidence": <0.0-1.0>
    }}
@@ -140,9 +147,14 @@ Instructions:
      "is_command": false
    }}
 
-3. For commands, set the confidence level (0.0-1.0) based on how certain you are that the user intends to use a command.
-4. For natural language that implies a command (e.g., "please open the file test.py" -> code:read:test.py), set command_type to "inferred".
-5. Only include the original_query field for inferred commands, showing the portion of text that isn't part of the command.
+Examples:
+1. "/help" → {{"is_command": true, "command_type": "slash", "command": "help", "args": [], "confidence": 1.0}}
+2. "code:read:main.py" → {{"is_command": true, "command_type": "code", "command": "read", "args": ["main.py"], "confidence": 1.0}}
+3. "Please read the file app.py" → {{"is_command": true, "command_type": "inferred", "command": "read", "args": ["app.py"], "confidence": 0.9, "original_query": ""}}
+4. "How do I optimize this code?" → {{"is_command": false}}
+
+IMPORTANT: Only use the three command types listed above: "slash", "code", or "inferred".
+Do NOT create other command types like "explicit", "direct", etc.
 
 IMPORTANT: ONLY return JSON - no explanations, markdown, or other text.
 """
@@ -167,49 +179,36 @@ IMPORTANT: ONLY return JSON - no explanations, markdown, or other text.
         return text_content
     
     def _parse_router_response(self, response_text: str, original_input: str) -> Optional[Dict[str, Any]]:
-        """
-        Parse the router response to extract command information.
-        
-        Args:
-            response_text: Response from Claude
-            original_input: Original user input
-            
-        Returns:
-            Command data or None if not a command
-        """
         try:
             response_json = json.loads(response_text)
-            
+        
             if not response_json.get('is_command', False):
                 return None
-                
+            
             command_type = response_json.get('command_type', '')
             command = response_json.get('command', '')
             args = response_json.get('args', [])
             confidence = response_json.get('confidence', 0.0)
-            
-            # For inferred commands, handle natural language inference
+        
+            # For inferred commands, DON'T add the code: prefix here
+            # We'll handle that in process_command
             if command_type == 'inferred':
-                # Check if the command already starts with 'code:' to avoid duplication
-                if not command.startswith('code:'):
-                    command = f'code:{command}'
-                    
                 original_query = response_json.get('original_query', '')
                 return {
-                    'command_type': command_type,
-                    'command': command,
+                    'command_type': 'inferred',
+                    'command': command,  # Don't modify the command here
                     'args': args,
                     'confidence': confidence,
                     'original_query': original_query
                 }
-            
+        
             return {
                 'command_type': command_type,
                 'command': command,
                 'args': args,
                 'confidence': confidence
             }
-            
+        
         except (json.JSONDecodeError, KeyError) as e:
             print(f"Error parsing router response: {str(e)}")
             return None

@@ -260,6 +260,8 @@ class FileTools:
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return {
                 "error": str(e)
             }
