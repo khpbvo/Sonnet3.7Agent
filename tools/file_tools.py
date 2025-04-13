@@ -46,10 +46,52 @@ def register_file_tools() -> List[Tool]:
         write_file_tool(),
         list_directory_tool(),
         find_files_tool(),
-        diff_tool()
+        diff_tool(),
+        list_loaded_files_tool(),
+        set_working_directory_tool()
     ]
     
     return tools
+
+def set_working_directory_tool() -> Tool:
+    """
+    Create a tool for setting the working directory.
+    
+    Returns:
+        Tool specification
+    """
+    return Tool(
+        name="set_working_directory",
+        description="Set the working directory for file operations",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to set as the working directory"
+                }
+            },
+            "required": ["path"]
+        }
+    )
+
+
+def list_loaded_files_tool() -> Tool:
+    """
+    Create a tool for listing loaded files.
+    
+    Returns:
+        Tool specification
+    """
+    return Tool(
+        name="list_loaded_files",
+        description="List all loaded files in the conversation memory",
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    )
 
 
 def read_file_tool() -> Tool:
@@ -257,6 +299,10 @@ class FileTools:
                 return await self._handle_find_files(tool_params)
             elif tool_name == 'generate_diff':
                 return await self._handle_generate_diff(tool_params)
+            elif tool_name == 'list_loaded_files':
+                return await self._handle_list_loaded_files(tool_params)
+            elif tool_name == 'set_working_directory':
+                return await self._handle_set_working_directory(tool_params)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as e:
@@ -540,3 +586,66 @@ class FileTools:
             },
             "has_changes": added_lines > 0 or removed_lines > 0
         }
+        
+    async def _handle_list_loaded_files(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle list_loaded_files tool.
+        
+        Args:
+            params: Tool parameters
+            
+        Returns:
+            Tool response with information about loaded files
+        """
+        loaded_files = self.file_manager.conversation_manager.loaded_files
+        
+        result = {
+            "files": [],
+            "count": len(loaded_files),
+            "summary": self.file_manager.conversation_manager.get_loaded_files_info()
+        }
+        
+        for filepath, content in loaded_files.items():
+            file_lines = content.count('\n') + 1
+            file_size = len(content)
+            
+            result["files"].append({
+                "path": filepath,
+                "lines": file_lines,
+                "size_bytes": file_size
+            })
+            
+        return result
+        
+    async def _handle_set_working_directory(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle set_working_directory tool.
+        
+        Args:
+            params: Tool parameters
+            
+        Returns:
+            Tool response with status of setting working directory
+        """
+        path = params.get('path')
+        
+        if not path:
+            return {"error": "Missing required parameter: path"}
+        
+        # Call the file manager to set the working directory
+        result = self.file_manager.set_working_directory(path)
+        
+        # Parse the result
+        if result.startswith("Error:"):
+            return {
+                "success": False,
+                "message": result,
+                "path": path
+            }
+        else:
+            return {
+                "success": True,
+                "message": result,
+                "path": self.file_manager.get_working_directory(),
+                "exists": True
+            }

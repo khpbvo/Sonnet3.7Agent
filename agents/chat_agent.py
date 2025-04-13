@@ -9,6 +9,7 @@ import asyncio
 from typing import Dict, List, Optional, Any, Callable, Union
 import anthropic
 import json
+import re
 
 from config import Config
 
@@ -84,7 +85,310 @@ class ChatAgent:
                 for char in result:
                     stream_callback(char)
             return result
-
+            
+        # Explicitly check for code commands and handle them directly
+        
+        # Handle code:workdir: command
+        if "code:workdir:" in message or ("change" in message.lower() and "directory" in message.lower()) or ("set" in message.lower() and "directory" in message.lower()) or ("cd" in message.lower() and message.lower() != "cd"):
+            # Extract path from code:workdir: command or from natural language
+            if "code:workdir:" in message:
+                path = message.split("code:workdir:", 1)[1].strip()
+            else:
+                # Try to extract path from natural language
+                words = message.split()
+                
+                # First try to find a path starting with /
+                for i, word in enumerate(words):
+                    if word.startswith('/') and i > 0:
+                        path = word.strip(".,;:'\"()[]{}").strip()
+                        break
+                else:
+                    # Next, try to find path containing folder indicators
+                    path_indicators = ["Documents", "Users", "Desktop", "Downloads", "/"]
+                    for i, word in enumerate(words):
+                        for indicator in path_indicators:
+                            if indicator in word:
+                                path = word.strip(".,;:'\"()[]{}").strip()
+                                break
+                        if 'path' in locals():
+                            break
+                    else:
+                        # Last resort: look for the word after "to" or "into"
+                        for i, word in enumerate(words):
+                            if word.lower() in ["to", "into"] and i < len(words) - 1:
+                                potential_path = words[i+1].strip(".,;:'\"()[]{}").strip()
+                                # Check if it looks like a path
+                                if '/' in potential_path or "." in potential_path:
+                                    path = potential_path
+                                    break
+                        else:
+                            path = None
+                
+                # If we extracted a path but it doesn't start with /, prepend the current working directory
+                if path and not path.startswith('/'):
+                    potential_path = os.path.join(self.file_manager.get_working_directory(), path)
+                    if os.path.exists(potential_path):
+                        path = potential_path
+            
+            if path:
+                # Use the set_working_directory tool directly
+                if self.debug_mode:
+                    print(f"[DEBUG] 🔧 Using set_working_directory tool with path: {path}")
+                
+                # Find the appropriate handler
+                handler = self.tool_handlers.get('set_working_directory')
+                
+                if handler:
+                    # Record the tool call
+                    tool_call = {
+                        "name": "set_working_directory",
+                        "input": {"path": path},
+                        "id": "manual_call_1"
+                    }
+                    self.tool_call_history.append(tool_call)
+                    
+                    # Call the handler
+                    result = await handler.handle_tool_use({
+                        "name": "set_working_directory",
+                        "input": {"path": path}
+                    })
+                    
+                    # Format a response
+                    response = f"Working directory has been set to: {path}\n\n"
+                    
+                    # List the directory contents
+                    try:
+                        dir_contents = await self._handle_list_directory(path)
+                        response += "Directory contents:\n"
+                        if "directories" in dir_contents:
+                            response += "\nFolders:\n"
+                            for d in dir_contents["directories"]:
+                                response += f"- {d['name']}/\n"
+                        if "files" in dir_contents:
+                            response += "\nFiles:\n"
+                            for f in dir_contents["files"]:
+                                response += f"- {f['name']}\n"
+                    except Exception as e:
+                        response += f"Error listing directory: {str(e)}\n"
+                    
+                    # Add the response to conversation
+                    self.conversation_manager.add_message("assistant", response)
+                    
+                    # Stream the response if needed
+                    if stream_callback:
+                        for char in response:
+                            stream_callback(char)
+                        return None
+                    return response
+                    
+        # Handle code:read: command
+        elif "code:read:" in message:
+            files_part = message.split("code:read:", 1)[1].strip()
+            files = [f.strip() for f in files_part.split(',')]
+            
+            if files:
+                # Use the read_file tool directly
+                if self.debug_mode:
+                    print(f"[DEBUG] 🔧 Using read_file tool for files: {files}")
+                
+                # Find the appropriate handler
+                handler = self.tool_handlers.get('read_file')
+                
+                if handler:
+                    response = f"Reading file{'s' if len(files) > 1 else ''}: {', '.join(files)}\n\n"
+                    
+                    # Process each file
+                    for i, filepath in enumerate(files):
+                        # Record the tool call
+                        tool_call = {
+                            "name": "read_file",
+                            "input": {"path": filepath},
+                            "id": f"manual_call_read_{i}"
+                        }
+                        self.tool_call_history.append(tool_call)
+                        
+                        # Call the handler
+                        result = await handler.handle_tool_use({
+                            "name": "read_file",
+                            "input": {"path": filepath}
+                        })
+                        
+                        if "error" in result:
+                            response += f"Error reading {filepath}: {result['error']}\n\n"
+                        else:
+                            content = result.get("content", "")
+                            response += f"### {filepath}\n\n```\n{content}\n```\n\n"
+                    
+                    # Add the response to conversation
+                    self.conversation_manager.add_message("assistant", response)
+                    
+                    # Stream the response if needed
+                    if stream_callback:
+                        for char in response:
+                            stream_callback(char)
+                        return None
+                    return response
+                    
+        # Handle code:list command
+        elif "code:list" in message:
+            # Use the list_loaded_files tool directly
+            if self.debug_mode:
+                print(f"[DEBUG] 🔧 Using list_loaded_files tool")
+            
+            # Find the appropriate handler
+            handler = self.tool_handlers.get('list_loaded_files')
+            
+            if handler:
+                # Record the tool call
+                tool_call = {
+                    "name": "list_loaded_files",
+                    "input": {},
+                    "id": "manual_call_list"
+                }
+                self.tool_call_history.append(tool_call)
+                
+                # Call the handler
+                result = await handler.handle_tool_use({
+                    "name": "list_loaded_files",
+                    "input": {}
+                })
+                
+                # Format a response
+                response = "Loaded files:\n\n"
+                if result.get("files"):
+                    for file_info in result.get("files", []):
+                        response += f"- {file_info['path']} ({file_info['lines']} lines, {file_info['size_bytes']} bytes)\n"
+                else:
+                    response += "No files loaded."
+                
+                # Add the response to conversation
+                self.conversation_manager.add_message("assistant", response)
+                
+                # Stream the response if needed
+                if stream_callback:
+                    for char in response:
+                        stream_callback(char)
+                    return None
+                return response
+                
+        # Handle code:find: command
+        elif "code:find:" in message:
+            recursive = "recursive:" in message
+            
+            if recursive:
+                directory = message.split("code:find:recursive:", 1)[1].strip()
+            else:
+                directory = message.split("code:find:", 1)[1].strip()
+            
+            if directory:
+                # Use the find_files tool directly
+                if self.debug_mode:
+                    print(f"[DEBUG] 🔧 Using find_files tool for directory: {directory}")
+                
+                # Find the appropriate handler
+                handler = self.tool_handlers.get('find_files')
+                
+                if handler:
+                    # Record the tool call
+                    tool_call = {
+                        "name": "find_files",
+                        "input": {
+                            "path": directory,
+                            "pattern": "\\.py$",  # Default to Python files
+                            "recursive": recursive
+                        },
+                        "id": "manual_call_find"
+                    }
+                    self.tool_call_history.append(tool_call)
+                    
+                    # Call the handler
+                    result = await handler.handle_tool_use({
+                        "name": "find_files",
+                        "input": {
+                            "path": directory,
+                            "pattern": "\\.py$",
+                            "recursive": recursive
+                        }
+                    })
+                    
+                    # Format a response
+                    if "error" in result:
+                        response = f"Error finding files: {result['error']}"
+                    else:
+                        matches = result.get("matches", [])
+                        response = f"Found {len(matches)} Python file{'s' if len(matches) != 1 else ''} in {directory}"
+                        response += f" (recursive: {'yes' if recursive else 'no'}):\n\n"
+                        
+                        for match in matches:
+                            response += f"- {match['path']}\n"
+                    
+                    # Add the response to conversation
+                    self.conversation_manager.add_message("assistant", response)
+                    
+                    # Stream the response if needed
+                    if stream_callback:
+                        for char in response:
+                            stream_callback(char)
+                        return None
+                    return response
+                    
+        # Handle natural language file reading
+        elif any(pattern in message.lower() for pattern in ["read file", "show file", "open file", "display file", "cat file", "view file"]) and (".py" in message or ".txt" in message or ".md" in message or ".json" in message):
+            # Try to extract filename using regex
+            file_pattern = r'(?:read|show|open|display|cat|view)(?:\s+the)?\s+file\s+(?:called\s+)?["\']?([^\s\'",;]+\.\w+)[\'"\s.,;)]*'
+            matches = re.finditer(file_pattern, message.lower())
+            
+            filenames = []
+            for match in matches:
+                if match.group(1):
+                    filenames.append(match.group(1))
+            
+            # If regex didn't work, try simple word analysis
+            if not filenames:
+                words = message.split()
+                for word in words:
+                    if "." in word and any(ext in word for ext in [".py", ".txt", ".md", ".json"]):
+                        clean_word = word.strip(".,;:'\"()[]{}").strip()
+                        filenames.append(clean_word)
+            
+            if filenames:
+                handler = self.tool_handlers.get('read_file')
+                
+                if handler:
+                    response = f"Reading file{'s' if len(filenames) > 1 else ''}: {', '.join(filenames)}\n\n"
+                    
+                    # Process each file
+                    for i, filepath in enumerate(filenames):
+                        # Record the tool call
+                        tool_call = {
+                            "name": "read_file",
+                            "input": {"path": filepath},
+                            "id": f"manual_call_read_nl_{i}"
+                        }
+                        self.tool_call_history.append(tool_call)
+                        
+                        # Call the handler
+                        result = await handler.handle_tool_use({
+                            "name": "read_file",
+                            "input": {"path": filepath}
+                        })
+                        
+                        if "error" in result:
+                            response += f"Error reading {filepath}: {result['error']}\n\n"
+                        else:
+                            content = result.get("content", "")
+                            response += f"### {filepath}\n\n```\n{content}\n```\n\n"
+                    
+                    # Add the response to conversation
+                    self.conversation_manager.add_message("assistant", response)
+                    
+                    # Stream the response if needed
+                    if stream_callback:
+                        for char in response:
+                            stream_callback(char)
+                        return None
+                    return response
+        
         # Add user message to conversation
         self.conversation_manager.add_message("user", message)
 
@@ -188,42 +492,44 @@ class ChatAgent:
                                     
                                     tool_calls.append(current_tool_call)
                                     current_tool_call = None
-                                    current_tool_input = ""
+                
+                # Handle tool calls after streaming is complete
+                if tool_calls:
+                    if self.debug_mode:
+                        print(f"\n[DEBUG] 🧰 Processing {len(tool_calls)} tool calls")
                     
-                    # Handle tool calls after streaming is complete
-                    if tool_calls:
+                    # Process each tool call
+                    tool_results = []
+                    for tool_call in tool_calls:
+                        self.tool_call_history.append(tool_call)
+                        result = await self._handle_tool_call(tool_call)
+                        
+                        # Debug the tool call and result
                         if self.debug_mode:
-                            print(f"\n[DEBUG] 🧰 Processing {len(tool_calls)} tool calls")
+                            print(f"[DEBUG] 🔧 Tool call details: {tool_call}")
+                            print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
                         
-                        tool_results = []
-                        for tool_call in tool_calls:
-                            self.tool_call_history.append(tool_call)
-                            
-                            if self.debug_mode:
-                                print(f"[DEBUG] 🔧 Executing tool: {tool_call['name']}")
-                                print(f"[DEBUG] 📝 Tool parameters: {json.dumps(tool_call['input'], indent=2)}")
-                            
-                            result = await self._handle_tool_call(tool_call)
-                            tool_results.append({
-                                "tool_call_id": tool_call.get("id"),
-                                "output": json.dumps(result)
-                            })
-                            
-                            if self.debug_mode:
-                                print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
+                        # Stream the result to the user for visibility
+                        stream_callback("\n\n")
+                        stream_callback(f"Tool: {tool_call.get('name')}\n")
+                        stream_callback(f"Result: {json.dumps(result, indent=2)}\n")
                         
-                        if tool_results:
-                            if self.debug_mode:
-                                print("[DEBUG] 🔄 Sending tool results back to Claude")
-                                print(f"[DEBUG] Tool results: {json.dumps(tool_results, indent=2)}")
-                            
-                            additional_response = await self._send_tool_results(tool_results, formatted_messages)
-                            if additional_response:
-                                stream_callback("\n\n")
-                                for chunk in additional_response.splitlines():
-                                    stream_callback(chunk + "\n")
-                                complete_response += "\n\n" + additional_response
-                    return None
+                        tool_results.append({
+                            "tool_call_id": tool_call.get("id"),
+                            "output": json.dumps(result)
+                        })
+                    
+                    # Call Claude again with the tool results
+                    if self.debug_mode:
+                        print("[DEBUG] 🔄 Sending tool results back to Claude")
+                    
+                    additional_response = await self._send_tool_results(tool_results, formatted_messages)
+                    if additional_response:
+                        stream_callback("\n\n")
+                        stream_callback("Further assistance based on tool results:\n")
+                        for chunk in additional_response.splitlines():
+                            stream_callback(chunk + "\n")
+                        complete_response += "\n\n" + additional_response
             else:
                 response = self.client.messages.create(
                     model=self.config.model,
@@ -264,6 +570,10 @@ class ChatAgent:
                         
                         result = await self._handle_tool_call(tool_call_info)
                         
+                        # Print the result directly in the response
+                        result_text = f"\n\nTool: {tool_call.name}\nResult: {json.dumps(result, indent=2)}\n"
+                        complete_response += result_text
+                        
                         tool_results.append({
                             "tool_call_id": tool_call.id,
                             "output": json.dumps(result)
@@ -278,12 +588,13 @@ class ChatAgent:
                         
                         additional_response = await self._send_tool_results(tool_results, formatted_messages)
                         if additional_response:
-                            complete_response += "\n\n" + additional_response
-                
-                if complete_response:
-                    self.conversation_manager.add_message("assistant", complete_response)
-                
-                return complete_response
+                            complete_response += "\n\nFurther assistance based on tool results:\n" + additional_response
+            
+            # Add the complete response to conversation history
+            if complete_response:
+                self.conversation_manager.add_message("assistant", complete_response)
+            
+            return complete_response if not stream_callback else None
             
         except Exception as e:
             error_msg = f"Error in send_message: {str(e)}"
@@ -484,6 +795,16 @@ Slash Commands:
   /tools - Show available tools
   /history - Show tool call history
 
+Direct Code Commands:
+  code:workdir:/path/to/dir - Set working directory
+  code:read:path/to/file.py - Read a file
+  code:read:file1.py,file2.py - Read multiple files
+  code:find:directory - Find Python files in directory
+  code:find:recursive:directory - Find Python files recursively
+  code:list - Show loaded files
+  code:generate:/path/to/file.py:prompt - Generate code with a prompt
+  code:change:/path/to/file.py:prompt - Modify existing code
+
 File Commands:
   You can use natural language to:
   - Read files: "Please read main.py" or "Show me the contents of config.py"
@@ -531,6 +852,37 @@ Tool calls: {len(self.tool_call_history)}
 {session_info['loaded_files_info']}
 """
         return status_text
+        
+    # Helper methods for direct tool usage
+    
+    async def _handle_list_directory(self, path: str) -> Dict[str, Any]:
+        """
+        Helper method to list directory contents.
+        
+        Args:
+            path: Path to list
+            
+        Returns:
+            Directory contents
+        """
+        handler = self.tool_handlers.get('list_directory')
+        
+        if not handler:
+            return {"error": "list_directory tool not available"}
+        
+        # Record the tool call
+        tool_call = {
+            "name": "list_directory",
+            "input": {"path": path},
+            "id": "manual_call_2"
+        }
+        self.tool_call_history.append(tool_call)
+        
+        # Call the handler
+        return await handler.handle_tool_use({
+            "name": "list_directory",
+            "input": {"path": path}
+        })
     
     def _extract_text_from_response(self, response) -> str:
         """
