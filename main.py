@@ -75,6 +75,8 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 - When users use direct code commands, ALWAYS treat them as explicit tool use instructions
 
 ## CRUCIAL BEHAVIOR:
+- BEFORE EDITING ANY FILE, YOU MUST FIRST READ ITS CONTENTS using the read_file tool
+- NEVER try to modify a file that you haven't read first in the current conversation
 - For changing working directory: ALWAYS use the set_working_directory tool, NEVER just list directory contents
 - For any request mentioning "change directory", "set directory", "working directory", "workingdir", or "cd to", use set_working_directory
 - After setting a working directory, confirm success and then list the directory contents to show the user what's available
@@ -89,6 +91,7 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 - Be specific about where and why improvements are needed
 
 # INSTRUCTIONS FOR CODE SUGGESTIONS
+- ALWAYS READ THE FULL FILE WITH read_file BEFORE SUGGESTING EDITS
 - Give clear, implementable suggestions for improving code
 - Use one of these notations for specific changes:
   1. "Line X: replace 'old_code' with 'new_code'"
@@ -96,6 +99,7 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
   3. "Replace this: ```python\\nold\\n``` With this: ```python\\nnew\\n```"
 - Explain why each suggested change is an improvement
 - Use modern Python conventions (f-strings, type hints, etc.)
+- When using modify_code, make sure to use the EXACT code from the file you just read
 
 # UNDERSTANDING CODE CONTEXT
 - When a file is loaded, study it thoroughly before discussing it
@@ -109,7 +113,7 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 - If you need to find files, ALWAYS use the list_directory or find_files tool
 - If you need to analyze code, ALWAYS use the analyze_code tool
 - If you need to generate code, ALWAYS use the generate_code tool
-- If you need to modify code, ALWAYS use the modify_code tool
+- If you need to modify code, ALWAYS use the modify_code tool and ensure you've read the file first
 - When you make changes to code, remember to explain what you did and why
 - ALWAYS use the proper tool for each task - never try to handle file or code operations manually
 - When someone asks to "set working directory", "set workingdir", "change directory", "cd to", ALWAYS use the set_working_directory tool

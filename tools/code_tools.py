@@ -379,14 +379,19 @@ class CodeTools:
             if not os.path.exists(absolute_path):
                 return {"error": f"File not found: {filepath}"}
             
-            # Read the current content
-            content = await self.file_manager.read_file(filepath)
+            # Read the current content - always read the file before editing
+            content = await self.file_manager.read_file(absolute_path)
             
             # Replace the code
             if original_code not in content:
-                return {"error": f"Original code segment not found in {filepath}"}
-            
-            modified_content = content.replace(original_code, new_code)
+                # Try a fuzzy match if exact match isn't found
+                closest_match = self._find_closest_match(content, original_code)
+                if closest_match:
+                    modified_content = content.replace(closest_match, new_code)
+                else:
+                    return {"error": f"Original code segment not found in {filepath}. Try reading the file first to get the exact content."}
+            else:
+                modified_content = content.replace(original_code, new_code)
             
             # Generate a diff
             diff = await self.file_manager.generate_diff(content, modified_content, filepath)
@@ -398,7 +403,7 @@ class CodeTools:
                 pass
             
             # Write the modified content
-            success = await self.file_manager.write_file(filepath, modified_content)
+            success = await self.file_manager.write_file(absolute_path, modified_content)
             
             if success:
                 return {
@@ -411,6 +416,62 @@ class CodeTools:
                 
         except Exception as e:
             return {"error": f"Error modifying code: {str(e)}"}
+    
+    def _find_closest_match(self, content: str, target_code: str) -> Optional[str]:
+        """
+        Find the closest matching code segment in a file.
+        Used when exact match isn't found to handle whitespace differences.
+        
+        Args:
+            content: File content to search in
+            target_code: Code segment to find
+            
+        Returns:
+            Closest matching segment or None if no good match found
+        """
+        # Normalize whitespace for comparison
+        normalized_target = re.sub(r'\s+', ' ', target_code.strip())
+        
+        # Try to find exact match with normalized whitespace
+        content_lines = content.splitlines()
+        for i in range(len(content_lines)):
+            # Try different window sizes around potentially matching lines
+            for window_size in range(1, min(20, len(content_lines) - i + 1)):
+                window_content = '\n'.join(content_lines[i:i+window_size])
+                normalized_window = re.sub(r'\s+', ' ', window_content.strip())
+                
+                # Check for high similarity
+                if normalized_target in normalized_window or normalized_window in normalized_target:
+                    return window_content
+                
+                # Compute similarity
+                similarity = self._similarity(normalized_target, normalized_window)
+                if similarity > 0.8:  # 80% similarity threshold
+                    return window_content
+        
+        return None
+    
+    def _similarity(self, str1: str, str2: str) -> float:
+        """
+        Calculate similarity between two strings using a simplified approach.
+        
+        Args:
+            str1: First string
+            str2: Second string
+            
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        # Simple character-level similarity
+        shorter = min(len(str1), len(str2))
+        longer = max(len(str1), len(str2))
+        
+        if longer == 0:
+            return 1.0
+            
+        # Count matching characters
+        matches = sum(c1 == c2 for c1, c2 in zip(str1, str2))
+        return matches / longer
     
     async def _handle_parse_diff_suggestions(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -517,8 +578,8 @@ class CodeTools:
             if not os.path.exists(absolute_path):
                 return {"error": f"File not found: {filepath}"}
             
-            # Read the current content
-            content = await self.file_manager.read_file(filepath)
+            # Read the current content - always read the file before editing
+            content = await self.file_manager.read_file(absolute_path)
             
             # Apply changes
             modified_content = content
@@ -526,6 +587,9 @@ class CodeTools:
             
             # Sort changes from highest to lowest line number to avoid index shifting
             sorted_changes = sorted(changes, key=lambda x: x.get('line', 0), reverse=True)
+            
+            # Track if any changes failed to find a match
+            failed_changes = []
             
             for change in sorted_changes:
                 line_num = change.get('line', 0)
@@ -536,10 +600,19 @@ class CodeTools:
                     # Whole-file replacement
                     if old_code in modified_content:
                         modified_content = modified_content.replace(old_code, new_code)
+                    else:
+                        # Try fuzzy match
+                        closest_match = self._find_closest_match(modified_content, old_code)
+                        if closest_match:
+                            modified_content = modified_content.replace(closest_match, new_code)
+                        else:
+                            failed_changes.append(f"Couldn't find segment: {old_code[:50]}...")
                 elif 1 <= line_num <= len(lines):
                     # Line-specific replacement
                     if old_code in lines[line_num-1]:
                         lines[line_num-1] = lines[line_num-1].replace(old_code, new_code)
+                    else:
+                        failed_changes.append(f"Couldn't find code on line {line_num}: {old_code}")
             
             # Rebuild content from lines if we made line-specific changes
             if any(change.get('line', 0) > 0 for change in changes):
@@ -555,17 +628,22 @@ class CodeTools:
                 pass
             
             # Write the modified content
-            success = await self.file_manager.write_file(filepath, modified_content)
+            success = await self.file_manager.write_file(absolute_path, modified_content)
             
-            if success:
-                return {
-                    "success": True,
-                    "filepath": filepath,
-                    "changes_applied": len(changes),
-                    "diff": diff
-                }
-            else:
-                return {"error": f"Failed to write file: {filepath}"}
+            result = {
+                "success": success,
+                "filepath": filepath,
+                "changes_applied": len(changes) - len(failed_changes),
+                "diff": diff
+            }
+            
+            if failed_changes:
+                result["warnings"] = failed_changes
+                
+            if not success:
+                result["error"] = f"Failed to write file: {filepath}"
+                
+            return result
                 
         except Exception as e:
             return {"error": f"Error applying changes: {str(e)}"}
