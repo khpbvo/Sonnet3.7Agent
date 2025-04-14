@@ -75,13 +75,38 @@ class DirectCommandHandler:
         if message.startswith('/'):
             return None
         
+        if self.debug_mode:
+            print(f"[DIRECT] Processing command: {message}")
+        
         # NEW: Try to process with tool chain manager if available
         if self.tool_chain_manager:
             chain_result = await self.tool_chain_manager.identify_and_execute_chain(message)
             if chain_result:
                 self.print_command_status("chain", f"{chain_result.get('chain_type', 'Unknown chain')}")
                 return f"Tool chain executed: {chain_result.get('chain_type')}"
+         
+        # Check for explicit commands first - highest priority
+        if message.startswith('code:'):
+            if message.startswith('code:read:'):
+                if await self._handle_read_command(message):
+                    return "File read command processed."
+            elif message.startswith('code:workdir:'):
+                if await self._handle_directory_command(message):
+                    return "Directory command processed."
+            elif message.startswith('code:list'):
+                if await self._handle_list_command(message):
+                    return "File listing command processed."
+            # Let other code: commands continue to the standard parsing
+        
+        # Handle compound commands like "change directory to X and read files Y"  
+        if re.search(r'(?:change|set)\s+(?:the\s+)?(?:working\s+)?directory.*?(?:and|then)\s+(?:read|show|display)', message, re.IGNORECASE):
+            if self.debug_mode:
+                print(f"[DIRECT] Detected compound directory+files command")
             
+            # Use the updated directory command handler which now properly handles compound commands
+            if await self._handle_directory_command(message):
+                return "Compound directory and file command processed."
+                
         # Check for directory commands
         if await self._handle_directory_command(message):
             return "Directory command processed."
@@ -141,6 +166,52 @@ class DirectCommandHandler:
         Returns:
             True if command was processed, False otherwise
         """
+        # First, check if message contains a compound command with "and" or "then"
+        compound_cmd = False
+        base_message = message
+        files_to_read = []
+        
+        # Extract files to read from compound commands
+        compound_match = re.search(r'(?:and|then)\s+read\s+(?:the\s+)?(?:files?\s+)?(.+?)(?:$|;)', message, re.IGNORECASE)
+        if compound_match:
+            compound_cmd = True
+            files_part = compound_match.group(1).strip()
+            
+            # Get the files to read (handling comma-separated lists)
+            if ',' in files_part:
+                files_to_read = [f.strip() for f in files_part.split(',')]
+            else:
+                # Try to intelligently split the file list
+                words = files_part.split()
+                if len(words) == 1:
+                    # Just one word, assume it's a filename
+                    files_to_read = [words[0]]
+                elif "and" in files_part.lower():
+                    # Try to handle "file1.py and file2.py"
+                    file_matches = re.findall(r'(\S+\.\w+)', files_part)
+                    if file_matches:
+                        files_to_read = file_matches
+                    else:
+                        # Fallback to files that have extensions
+                        files_to_read = [word for word in words if '.' in word]
+                else:
+                    # Multiple words, assume files have extensions
+                    files_to_read = [word for word in words if '.' in word]
+            
+            # Remove any "and" words that might have been caught
+            files_to_read = [f for f in files_to_read if f.lower() != 'and']
+            
+            if self.debug_mode:
+                print(f"[DIRECT] Files to read after parsing: {files_to_read}")
+            
+            # Trim the message to only include the directory part
+            base_message = message[:compound_match.start()].strip()
+            
+            if self.debug_mode:
+                print(f"[DIRECT] Detected compound command")
+                print(f"[DIRECT] Base message: {base_message}")
+                print(f"[DIRECT] Files to read: {files_to_read}")
+        
         # Detect directory change intent
         directory_patterns = [
             # Explicit commands
@@ -161,9 +232,18 @@ class DirectCommandHandler:
     
         path = None
         for pattern in directory_patterns:
-            match = re.search(pattern, message, re.IGNORECASE)
+            match = re.search(pattern, base_message, re.IGNORECASE)
             if match:
                 path = match.group(1).strip().strip('"\'')
+                
+                # Clean up the path - remove any trailing "and" or "then" phrases
+                # that might have been included in the match
+                and_then_match = re.search(r'^(.*?)(?:\s+(?:and|then)\s+.*)?$', path, re.IGNORECASE)
+                if and_then_match:
+                    path = and_then_match.group(1).strip()
+                
+                if self.debug_mode:
+                    print(f"[DIRECT] Extracted directory path: {path}")
                 break
     
         if not path:
@@ -194,7 +274,7 @@ class DirectCommandHandler:
     
         print(f"[SUCCESS] Working directory set to: {path}")
     
-        # NEW: Always chain with list_directory to show directory contents
+        # Always chain with list_directory to show directory contents
         list_handler = self.tool_handlers.get('list_directory')
         if list_handler:
             list_result = await list_handler.handle_tool_use({
@@ -207,6 +287,14 @@ class DirectCommandHandler:
         else:
             # Fallback to the old method if the list_directory handler isn't available
             await self._list_current_directory(condensed=True)
+            
+        # If there are files to read after directory change, read them
+        if files_to_read:
+            if self.debug_mode:
+                print(f"[DIRECT] Chaining file reading after directory change: {files_to_read}")
+            
+            for file_path in files_to_read:
+                await self._read_single_file(file_path)
     
         return True
 
@@ -369,11 +457,11 @@ class DirectCommandHandler:
         # Detect read intent
         read_patterns = [
             r'code:read:(.+)',
-            r'read\s+(?:the\s+)?file\s+(?:called\s+)?([^\s,]+)',
-            r'show\s+(?:the\s+)?(?:content|contents)\s+of\s+(?:file\s+)?([^\s,]+)',
-            r'display\s+(?:the\s+)?(?:file|content)\s+(?:of\s+)?([^\s,]+)',
-            r'open\s+(?:the\s+)?file\s+([^\s,]+)',
-            r'cat\s+([^\s,]+)'
+            r'read\s+(?:the\s+)?(?:python\s+)?files?\s+(?:called\s+)?([^\s,]+(?:\s*,\s*[^\s,]+)*)',
+            r'show\s+(?:the\s+)?(?:content|contents)\s+of\s+(?:file\s+)?([^\s,]+(?:\s*,\s*[^\s,]+)*)',
+            r'display\s+(?:the\s+)?(?:file|content)\s+(?:of\s+)?([^\s,]+(?:\s*,\s*[^\s,]+)*)',
+            r'open\s+(?:the\s+)?files?\s+([^\s,]+(?:\s*,\s*[^\s,]+)*)',
+            r'cat\s+([^\s,]+(?:\s*,\s*[^\s,]+)*)'
         ]
         
         filepath = None
@@ -400,16 +488,25 @@ class DirectCommandHandler:
             for pattern in read_patterns:
                 match = re.search(pattern, message, re.IGNORECASE)
                 if match:
-                    filepath = match.group(1).strip().strip('"\'')
-                    # Print command status
-                    self.print_command_status("read", f"Reading file: {filepath}")
+                    matched_paths = match.group(1).strip().strip('"\'')
+                    
+                    # Check if it's a comma-separated list
+                    if ',' in matched_paths:
+                        filepaths = [f.strip() for f in matched_paths.split(',')]
+                        multiple_files = True
+                        # Print command status
+                        self.print_command_status("read", f"Reading multiple files: {matched_paths}")
+                    else:
+                        filepath = matched_paths
+                        # Print command status
+                        self.print_command_status("read", f"Reading file: {filepath}")
                     break
         
-        if not filepath and not multiple_files:
+        if not filepath and not multiple_files and not filepaths:
             return False
         
         # Handle multiple files case
-        if multiple_files:
+        if multiple_files or filepaths:
             for file_path in filepaths:
                 await self._read_single_file(file_path)
             return True

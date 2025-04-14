@@ -290,11 +290,10 @@ async def main():
                         print(f"\nFound and read file: {filepath}")
                         print(f"Preview: {content[:200]}..." if len(content) > 200 else f"Preview: {content}")
                 
-                # Still send a version to Claude to maintain conversation context
-                callback = create_stream_callback(config.typing_simulation_delay)
-                print_colored("\nAdditional response from Claude: ", "cyan")
-                await chat_agent.send_message(user_input, callback)
-                
+                # Don't send to Claude, just add to conversation history
+                conversation_manager.add_message("user", user_input)
+                conversation_manager.add_message("assistant", f"Tool chain executed: {chain_result.get('chain_type')}")
+            
             # Try direct command processing if chain not identified
             elif not chain_result:
                 direct_result = await direct_command_handler.process_command(user_input)
@@ -303,10 +302,10 @@ async def main():
                     print_colored("\nAssistant: ", "green", bold=True)
                     print(f"I've processed your command directly: {direct_result}")
                 
-                    # Still send a version to Claude to maintain conversation context
-                    callback = create_stream_callback(config.typing_simulation_delay)
-                    print_colored("\nAdditional response from Claude: ", "cyan")
-                    await chat_agent.send_message(user_input, callback)
+                    # Don't send to Claude when we've already handled the command directly
+                    # Just add it to the conversation history without generating a response
+                    conversation_manager.add_message("user", user_input)
+                    conversation_manager.add_message("assistant", f"Command processed: {direct_result}")
                 else:
                     # Create streaming callback
                     callback = create_stream_callback(config.typing_simulation_delay)
