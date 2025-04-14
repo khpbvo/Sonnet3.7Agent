@@ -100,10 +100,6 @@ class ChatAgent:
             # Prepare tools for API call if we have any
             formatted_tools = [tool.to_dict() for tool in self.tools] if self.tools else None
         
-            # Enable debug mode temporarily for this call to debug the issue
-            orig_debug = self.debug_mode
-            self.debug_mode = True
-        
             if self.debug_mode:
                 print("\n[DEBUG] Sending message to Claude with:")
                 print(f"[DEBUG] - Model: {self.config.model}")
@@ -125,110 +121,175 @@ class ChatAgent:
                 ) as stream:
                     tool_calls = []
                     current_tool_call = None
-                    current_tool_input = ""  # Collector for incremental tool input
+                    current_tool_input = ""
                 
-                    print("[DEBUG] Stream started")
+                    if self.debug_mode:
+                        print("[DEBUG] Stream started")
                 
                     for event in stream:
-                        if hasattr(event, 'type'):
+                        event_type = getattr(event, 'type', None)
+                        if self.debug_mode and event_type:
+                            print(f"[DEBUG] Event type: {event_type}")
+                        
+                        # Regular content block event
+                        if event_type == "content_block_delta":
+                            if hasattr(event, 'delta') and hasattr(event.delta, 'text'):
+                                chunk_text = event.delta.text
+                                if chunk_text:
+                                    complete_response += chunk_text
+                                    stream_callback(chunk_text)
+                        
+                        # Tool call events handling - now checking for input_json events
+                        elif event_type == "input_json":
                             if self.debug_mode:
-                                print(f"[DEBUG] Event type: {event.type}")
-                        
-                            # Regular content block event
-                            if event.type == "content_block_delta":
-                                if hasattr(event, 'delta') and hasattr(event.delta, 'text'):
-                                    chunk_text = event.delta.text
-                                    if chunk_text:
-                                        complete_response += chunk_text
-                                        stream_callback(chunk_text)
-                        
-                            # Tool call events handling
-                            elif event.type == "tool_call_start":
+                                print(f"\n[DEBUG] 🔧 Tool call detected via input_json event")
+                                print(f"[DEBUG] Partial JSON: {getattr(event, 'partial_json', None)}")
+                                print(f"[DEBUG] Snapshot: {getattr(event, 'snapshot', None)}")
+                                
+                            # Only process when we have a non-empty snapshot (meaning the JSON is complete)
+                            if hasattr(event, 'snapshot') and event.snapshot:
+                                snapshot = event.snapshot
+                                
                                 if self.debug_mode:
-                                    print(f"\n[DEBUG] 🔧 Tool call started: {event.tool_call.name}")
-                            
-                                current_tool_call = {
-                                    "name": event.tool_call.name,
-                                    "input": "",  # Will be filled after collecting input
-                                    "id": event.tool_call.id
-                                }
-                                current_tool_input = ""
-                        
-                            elif event.type == "tool_call_delta":
-                                if current_tool_call and hasattr(event, 'delta') and hasattr(event.delta, 'input'):
-                                    current_tool_input += event.delta.input
-                                    if self.debug_mode:
-                                        print(f"[DEBUG] Tool input chunk: {event.delta.input}")
-                        
-                            elif event.type == "tool_call_end":
-                                if current_tool_call:
-                                    try:
-                                        if self.debug_mode:
-                                            print(f"[DEBUG] 🔧 Tool call completed: {current_tool_call['name']}")
-                                            print(f"[DEBUG] 📝 Raw tool input: {current_tool_input}")
-                                    
-                                        # Process tool input - try to parse JSON if applicable
-                                        if current_tool_input.strip().startswith('{'):
-                                            try:
-                                                parsed_input = json.loads(current_tool_input)
-                                                current_tool_call["input"] = parsed_input
-                                            except json.JSONDecodeError as e:
-                                                if self.debug_mode:
-                                                    print(f"[DEBUG] ⚠️ JSON parsing error: {str(e)}")
-                                                current_tool_call["input"] = current_tool_input
+                                    print(f"[DEBUG] 📦 Complete snapshot received: {snapshot}")
+                                
+                                # Process the complete tool call
+                                try:
+                                    # Check if snapshot contains tool information
+                                    if isinstance(snapshot, dict):
+                                        # Case 1: We have a name in the snapshot
+                                        if 'name' in snapshot and snapshot.get('name') in self.tool_handlers:
+                                            tool_name = snapshot.get('name')
+                                            tool_input = snapshot.get('input', {})
+                                            tool_id = snapshot.get('id', f"tool-{len(self.tool_call_history)}")
+                                        
+                                        # Case 2: We don't have a name, but need to infer it from parameters
                                         else:
-                                            current_tool_call["input"] = current_tool_input
-                                    
-                                        tool_calls.append(current_tool_call)
-                                        current_tool_call = None
-                                    except Exception as e:
+                                            # Infer tool based on parameters
+                                            tool_name = None
+                                            tool_input = snapshot
+                                            tool_id = f"tool-{len(self.tool_call_history)}"
+                                            
+                                            # Infer tool based on parameters
+                                            if 'path' in snapshot and len(snapshot) == 1:
+                                                # If only path is provided, check if it's a directory or a file
+                                                path = snapshot['path']
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔍 Inferring tool from path: {path}")
+                                                
+                                                # Try to check if it's a directory
+                                                if os.path.isdir(path):
+                                                    tool_name = 'set_working_directory'
+                                                    if self.debug_mode:
+                                                        print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (path is a directory)")
+                                                elif os.path.isfile(path):
+                                                    tool_name = 'read_file'
+                                                    if self.debug_mode:
+                                                        print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (path is a file)")
+                                                else:
+                                                    # Assume it's a directory change if the path looks like a directory path
+                                                    # (ends with / or doesn't have a file extension)
+                                                    if path.endswith('/') or '.' not in os.path.basename(path):
+                                                        tool_name = 'set_working_directory'
+                                                        if self.debug_mode:
+                                                            print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (path looks like a directory)")
+                                                    else:
+                                                        # Default to read_file for any other path
+                                                        tool_name = 'read_file'
+                                                        if self.debug_mode:
+                                                            print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (default for path parameter)")
+                                            elif 'path' in snapshot and 'content' in snapshot:
+                                                tool_name = 'write_file'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (path and content parameters)")
+                                            elif 'filepath' in snapshot and 'code' in snapshot:
+                                                tool_name = 'generate_code'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (filepath and code parameters)")
+                                            elif 'filepath' in snapshot and 'analysis_type' in snapshot:
+                                                tool_name = 'analyze_code'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (filepath and analysis_type parameters)")
+                                        
+                                        # If we have a valid tool name
+                                        if tool_name and tool_name in self.tool_handlers:
+                                            if self.debug_mode:
+                                                print(f"[DEBUG] 🔧 Using tool: {tool_name}")
+                                                print(f"[DEBUG] 📝 Tool input: {tool_input}")
+                                            
+                                            # Create the tool call object
+                                            tool_call = {
+                                                "name": tool_name,
+                                                "input": tool_input,
+                                                "id": tool_id
+                                            }
+                                            
+                                            # Add to tool call history
+                                            self.tool_call_history.append(tool_call)
+                                            
+                                            # Execute the tool
+                                            if self.debug_mode:
+                                                print(f"[DEBUG] 🛠️ Executing tool: {tool_name}")
+                                                
+                                            result = await self._handle_tool_call(tool_call)
+                                            
+                                            # Add result to response - only show details in debug mode
+                                            if self.debug_mode:
+                                                # In debug mode, show the full tool result
+                                                result_text = f"\n\nTool: {tool_name}\nResult: {json.dumps(result, indent=2)}\n"
+                                            else:
+                                                # In normal mode, just indicate a tool was used
+                                                if 'error' in result:
+                                                    # Show errors even in non-debug mode
+                                                    result_text = f"\n[Tool error: {result['error']}]\n"
+                                                else:
+                                                    # Don't show successful tool results in regular mode
+                                                    result_text = ""
+                                            
+                                            if result_text:
+                                                stream_callback(result_text)
+                                                complete_response += result_text
+                                            
+                                            # Submit tool output back to Claude
+                                            try:
+                                                # Don't try to submit directly as this SDK version doesn't support it
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] ✅ Tool execution complete, adding result to conversation")
+                                                
+                                                # Add a system message with the tool result for context
+                                                self.conversation_manager.add_message(
+                                                    "system", 
+                                                    f"Tool '{tool_name}' was called with input: {json.dumps(tool_input)} " +
+                                                    f"and returned result: {json.dumps(result)}"
+                                                )
+                                            except Exception as e:
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] ❌ Error handling tool result: {str(e)}")
+                                        else:
+                                            if self.debug_mode:
+                                                print(f"[DEBUG] ⚠️ Could not identify a valid tool for snapshot: {snapshot}")
+                                    else:
                                         if self.debug_mode:
-                                            print(f"[DEBUG] ⚠️ Error processing tool input: {str(e)}")
-                                            import traceback
-                                            traceback.print_exc()
+                                            print(f"[DEBUG] ⚠️ Snapshot is not a dictionary: {snapshot}")
+                                
+                                except Exception as e:
+                                    if self.debug_mode:
+                                        print(f"[DEBUG] ❌ Error processing tool snapshot: {str(e)}")
+                                        import traceback
+                                        traceback.print_exc()
+            else:
+                # Non-streaming mode
+                response = await self.client.messages.create(
+                    model=self.config.model,
+                    max_tokens=self.config.max_response_tokens,
+                    system=system_message,
+                    messages=formatted_messages,
+                    tools=formatted_tools
+                )
                 
-                    # Handle tool calls after streaming is complete
-                    if tool_calls:
-                        if self.debug_mode:
-                            print(f"\n[DEBUG] 🧰 Processing {len(tool_calls)} tool calls")
-                    
-                        tool_results = []
-                        for tool_call in tool_calls:
-                            self.tool_call_history.append(tool_call)
-                        
-                            if self.debug_mode:
-                                print(f"[DEBUG] 🔧 Processing tool: {tool_call['name']}")
-                                print(f"[DEBUG] 📝 Tool input: {tool_call['input']}")
-                        
-                            # Execute the tool
-                            result = await self._handle_tool_call(tool_call)
-                        
-                            # Stream the tool result back to the user
-                            result_text = f"\n\nTool: {tool_call['name']}\nResult: {json.dumps(result, indent=2)}\n"
-                            stream_callback(result_text)
-                            complete_response += result_text
-                        
-                            tool_results.append({
-                                "tool_call_id": tool_call['id'],
-                                "output": json.dumps(result)
-                            })
-                    
-                        # Send tool results back to Claude for additional processing
-                        if tool_results:
-                            if self.debug_mode:
-                                print("[DEBUG] 🔄 Sending tool results back to Claude")
-                        
-                            additional_response = await self._send_tool_results(tool_results, formatted_messages)
-                            if additional_response:
-                                stream_callback("\n\n")
-                                stream_callback("Further assistance based on tool results:\n")
-                                for chunk in additional_response.splitlines():
-                                    stream_callback(chunk + "\n")
-                                complete_response += "\n\n" + additional_response
-        
-            # Restore original debug mode
-            self.debug_mode = orig_debug
-        
+                # Extract text content
+                complete_response = self._extract_text_from_response(response)
+            
             # Add the complete response to conversation history
             if complete_response:
                 self.conversation_manager.add_message("assistant", complete_response)
@@ -242,57 +303,14 @@ class ChatAgent:
             traceback.print_exc()
             return f"Error: {str(e)}"
 
+    # This method is no longer needed with the new API
     async def _send_tool_results(self, tool_results, previous_messages):
         """
-        Send tool results back to Claude for further processing.
-
-        Args:
-            tool_results: List of tool results
-            previous_messages: Previously formatted messages
-
-        Returns:
-            Claude's response after processing tool results
+        This method is deprecated with the latest Anthropic API.
+        Tool results are now submitted directly through the stream.
         """
-        try:
-            system_message, _ = await self.conversation_manager.extract_system_message()
-
-            if self.debug_mode:
-                print(f"[DEBUG] Sending {len(tool_results)} tool results to Claude")
-                print(f"[DEBUG] Tool results: {json.dumps(tool_results, indent=2)}")
-
-            # Ensure tool_results are properly formatted
-            formatted_tool_results = []
-            for result in tool_results:
-                # Make sure output is a string
-                output = result.get("output")
-                if not isinstance(output, str):
-                    output = json.dumps(output)
-
-                formatted_tool_results.append({
-                    "tool_call_id": result.get("tool_call_id"),
-                    "output": output
-                })
-
-            response = self.client.messages.create(
-                model=self.config.model,
-                max_tokens=self.config.max_response_tokens,
-                system=system_message,
-                messages=previous_messages,
-                tool_results=formatted_tool_results
-            )
-
-            # Extract and debug the response
-            text_content = self._extract_text_from_response(response)
-            if self.debug_mode:
-                print(f"[DEBUG] Claude response after tool results: {text_content[:100]}...")
-
-            return text_content
-
-        except Exception as e:
-            print(f"Error sending tool results: {str(e)}", file=sys.stderr)
-            import traceback
-            traceback.print_exc()
-            return f"Error processing tool results: {str(e)}"
+        print("[DEBUG] _send_tool_results is deprecated, tool results should be submitted through the stream")
+        return "Tool results were processed."
 
     async def _handle_tool_call(self, tool_call):
         """

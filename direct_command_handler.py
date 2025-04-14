@@ -116,8 +116,8 @@ class DirectCommandHandler:
     
         print(f"[SUCCESS] Working directory set to: {path}")
     
-        # Show directory contents
-        await self._list_current_directory()
+        # Show directory contents (condensed)
+        await self._list_current_directory(condensed=True)
     
         return True
     
@@ -174,6 +174,13 @@ class DirectCommandHandler:
             print(f"[ERROR] {result['error']}")
             return False
         
+        # Display in a more condensed format
+        self._display_directory_contents(result, path)
+        
+        return True
+    
+    def _display_directory_contents(self, result, path):
+        """Display directory contents in a condensed format."""
         print(f"Contents of {path}:")
         
         if "directories" in result and result["directories"]:
@@ -183,14 +190,44 @@ class DirectCommandHandler:
         
         if "files" in result and result["files"]:
             print("\nFiles:")
+            # Display files with condensed information
             for f in result["files"]:
                 size = f.get('size_bytes', 0)
-                size_str = f"{size} bytes" if size < 1024 else f"{size/1024:.1f} KB"
+                # Format size more neatly
+                if size < 1024:
+                    size_str = f"{size} bytes"
+                elif size < 1024 * 1024:
+                    size_str = f"{size/1024:.1f} KB"
+                else:
+                    size_str = f"{size/(1024*1024):.1f} MB"
+                    
                 print(f"- {f['name']} ({size_str})")
         
         print(f"\nTotal: {result.get('total_entries', 0)} items")
         
-        return True
+    async def _list_current_directory(self, condensed=False) -> None:
+        """List the contents of the current working directory."""
+        path = self.file_manager.get_working_directory()
+        
+        # Get the handler
+        handler = self.tool_handlers.get('list_directory')
+        if not handler:
+            print("[ERROR] No handler found for list_directory")
+            return
+        
+        # Execute the tool directly
+        result = await handler.handle_tool_use({
+            "name": "list_directory",
+            "input": {"path": path}
+        })
+        
+        # Print the result
+        if "error" in result:
+            print(f"[ERROR] {result['error']}")
+            return
+        
+        # Display contents
+        self._display_directory_contents(result, path)
     
     async def _handle_read_command(self, message: str) -> bool:
         """
@@ -237,49 +274,15 @@ class DirectCommandHandler:
             "input": {"path": filepath}
         })
         
-        # Print the result
+        # Print the result - only print basic info, not the full file content
         if "error" in result:
             print(f"[ERROR] {result['error']}")
             return False
         
-        print(f"Contents of {filepath}:")
-        print(f"\n```\n{result['content']}\n```\n")
+        print(f"Successfully read file: {filepath}")
+        # Only show preview in debug mode
+        if self.debug_mode:
+            content_preview = result['content'][:200] + '...' if len(result['content']) > 200 else result['content']
+            print(f"\nPreview:\n```\n{content_preview}\n```\n")
         
         return True
-    
-    async def _list_current_directory(self) -> None:
-        """List the contents of the current working directory."""
-        path = self.file_manager.get_working_directory()
-        
-        # Get the handler
-        handler = self.tool_handlers.get('list_directory')
-        if not handler:
-            print("[ERROR] No handler found for list_directory")
-            return
-        
-        # Execute the tool directly
-        result = await handler.handle_tool_use({
-            "name": "list_directory",
-            "input": {"path": path}
-        })
-        
-        # Print the result
-        if "error" in result:
-            print(f"[ERROR] {result['error']}")
-            return
-        
-        print(f"Contents of current directory ({path}):")
-        
-        if "directories" in result and result["directories"]:
-            print("\nFolders:")
-            for d in result["directories"]:
-                print(f"- {d['name']}/")
-        
-        if "files" in result and result["files"]:
-            print("\nFiles:")
-            for f in result["files"]:
-                size = f.get('size_bytes', 0)
-                size_str = f"{size} bytes" if size < 1024 else f"{size/1024:.1f} KB"
-                print(f"- {f['name']} ({size_str})")
-        
-        print(f"\nTotal: {result.get('total_entries', 0)} items")
