@@ -13,6 +13,7 @@ class Config:
         self.max_response_tokens = 64000
         
         # Application settings
+        self.force_tool_usage = True  # Force tools to be used even if Claude doesn't recognize them
         self.stream_responses = True
         self.typing_simulation_delay = 0.01  # Delay for simulated typing effect
         self.use_colors = True

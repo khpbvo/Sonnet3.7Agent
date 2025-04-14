@@ -22,6 +22,7 @@ from agents.chat_agent import ChatAgent
 # Import tools
 from tools.file_tools import FileTools, register_file_tools, Tool
 from tools.code_tools import CodeTools, register_code_tools
+from direct_command_handler import DirectCommandHandler
 
 # Import utilities
 from utils.terminal_utils import get_multiline_input, print_colored, create_stream_callback
@@ -200,6 +201,10 @@ async def main():
     chat_agent = ChatAgent(api_key, config, conversation_manager, file_manager, debug_mode=debug_mode)
     chat_agent.register_tools(all_tools, tool_handlers)
     
+    
+    debug_mode = args.debug
+    chat_agent = ChatAgent(api_key, config, conversation_manager, file_manager, debug_mode=debug_mode)
+    chat_agent.register_tools(all_tools, tool_handlers)
     # Application context
     app_context = {
         "config": config,
@@ -227,18 +232,30 @@ async def main():
             user_input = get_multiline_input("\nYou: ")
             if not user_input.strip():
                 continue
+        
+            # Enable direct command processing
+            direct_result = await direct_command_handler.process_command(user_input)
+        
+            if direct_result:
+                print_colored("\nAssistant: ", "green", bold=True)
+                print(f"I've processed your command directly: {direct_result}")
             
-            # Create streaming callback
-            callback = create_stream_callback(config.typing_simulation_delay)
+                # Still send a version to Claude to maintain conversation context
+                callback = create_stream_callback(config.typing_simulation_delay)
+                print_colored("\nAdditional response from Claude: ", "cyan")
+                await chat_agent.send_message(user_input, callback)
+            else:
+                # Create streaming callback
+                callback = create_stream_callback(config.typing_simulation_delay)
             
-            print_colored("\nAssistant: ", "green", bold=True)
-            await chat_agent.send_message(user_input, callback)
-            
+                print_colored("\nAssistant: ", "green", bold=True)
+                await chat_agent.send_message(user_input, callback)
+        
             # Show token usage if it's high
             token_percentage = conversation_manager.get_token_percentage()
             if token_percentage > 50:
                 print_colored(f"\n[Token usage: ~{conversation_manager.get_token_usage():,} tokens ({token_percentage:.1f}% of max)]", "yellow")
-    
+
     except KeyboardInterrupt:
         print_colored("\nExiting...", "cyan")
         sys.exit(0)
@@ -247,7 +264,3 @@ async def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

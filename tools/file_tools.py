@@ -23,11 +23,11 @@ class Tool:
     def to_dict(self):
         """Convert to dictionary format expected by Anthropic API"""
         return {
+            "type": "custom",  # Updated to match Anthropic API expectations
             "name": self.name,
             "description": self.description,
             "input_schema": self.input_schema
         }
-
 # Define our own ToolUseBlock class 
 class ToolUseBlock:
     def __init__(self, name, input):
@@ -315,10 +315,10 @@ class FileTools:
     async def _handle_read_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle read_file tool.
-    
+
         Args:
             params: Tool parameters
-        
+
         Returns:
             Tool response
         """
@@ -328,44 +328,61 @@ class FileTools:
             path = params.get('path')
         elif isinstance(params, str):
             # Handle case where the entire params is just the path string
-            path = params
-    
-        print(f"[DEBUG] Read file params: {params}")
-        print(f"[DEBUG] Extracted path: {path}")
-    
+            path = params.strip()
+
+        if self.debug_mode:
+            print(f"[DEBUG] Read file params: {params}")
+            print(f"[DEBUG] Extracted path: {path}")
+
         if not path:
             return {"error": "Missing required parameter: path"}
-    
+
         try:
-            print(f"[DEBUG] Attempting to read file: {path}")
+            if self.debug_mode:
+                print(f"[DEBUG] Attempting to read file: {path}" )
+            
+            # Get absolute path
             absolute_path = self.file_manager._get_absolute_path(path)
-            print(f"[DEBUG] Absolute path: {absolute_path}")
+            if self.debug_mode:
+                print(f"[DEBUG] Absolute path: {absolute_path}")
+                print(f"[DEBUG] Current working directory: {self.file_manager.get_working_directory()}")
+                print(f"[DEBUG] File exists: {os.path.exists(absolute_path)}")
         
             # Check if file exists
             if not os.path.exists(absolute_path):
-                return {"error": f"File not found: {absolute_path}"}
+                return {"error": f"File not found: {path}", "absolute_path": absolute_path, "working_dir": self.file_manager.get_working_directory()}
+        
+            if not os.path.isfile(absolute_path):
+                return {"error": f"Path is not a file: {path}", "absolute_path": absolute_path}
         
             content = await self.file_manager.read_file(path)
+        
             return {
                 "content": content,
                 "encoding": "utf-8",
                 "path": path,
+                "absolute_path": absolute_path,
                 "size_bytes": len(content.encode('utf-8'))
             }
         except FileNotFoundError:
-            return {"error": f"File not found: {path}"}
+            return {"error": f"File not found: {path}", "working_dir": self.file_manager.get_working_directory()}
+        except PermissionError:
+            return {"error": f"Permission denied when trying to read file: {path}"}
+        except IsADirectoryError:
+            return {"error": f"Path is a directory, not a file: {path}"}
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return {"error": f"Error reading file: {str(e)}"}
+            if self.debug_mode:
+                import traceback
+                traceback.print_exc()
+            return {"error": f"Error reading file: {str(e)}", "exception_type": type(e).__name__}
     
     async def _handle_write_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle write_file tool.
-        
+
         Args:
             params: Tool parameters
-            
+
         Returns:
             Tool response
         """
