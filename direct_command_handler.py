@@ -41,6 +41,10 @@ class DirectCommandHandler:
         Returns:
             Response message if command was processed, None otherwise
         """
+        # Check for slash commands - these are handled by the main loop now
+        if message.startswith('/'):
+            return None
+            
         # Check for directory commands
         if await self._handle_directory_command(message):
             return "Directory command processed."
@@ -53,16 +57,50 @@ class DirectCommandHandler:
         if await self._handle_read_command(message):
             return "File read command processed."
             
+        # Check for code commands
+        if await self._handle_code_command(message):
+            return "Code command processed."
+            
         # No direct command matched
         return None
-    
-    async def _handle_directory_command(self, message: str) -> bool:
+        
+    async def _handle_code_command(self, message: str) -> bool:
         """
-    Handle directory change commands.
-    
+        Handle code generation and modification commands.
+        
         Args:
             message: User message
+            
+        Returns:
+            True if command was processed, False otherwise
+        """
+        # Detect code command patterns
+        code_patterns = [
+            r'code:generate:(.+)',
+            r'code:change:(.+)',
+            r'generate\s+code\s+(?:for|in)\s+(.+)',
+            r'modify\s+(?:the\s+)?code\s+(?:in|of)\s+(.+)'
+        ]
         
+        for pattern in code_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                # We found a code command, but we'll let the agent handle it
+                # through regular tool calls rather than executing directly
+                if self.debug_mode:
+                    print(f"[DIRECT] Detected code command: {match.group(0)}")
+                    print(f"[DIRECT] Letting the agent handle it via tools")
+                return False  # Return False to let the agent handle it
+                
+        return False  # No code command matched
+
+    async def _handle_directory_command(self, message: str) -> bool:
+        """
+        Handle directory change commands.
+        
+        Args:
+            message: User message
+            
         Returns:
             True if command was processed, False otherwise
         """
@@ -120,10 +158,10 @@ class DirectCommandHandler:
         await self._list_current_directory(condensed=True)
     
         return True
-    
+
     async def _handle_list_command(self, message: str) -> bool:
         """
-        Handle list directory commands.
+        Handle list directory commands and code:list commands.
         
         Args:
             message: User message
@@ -133,6 +171,7 @@ class DirectCommandHandler:
         """
         # Detect list intent
         list_patterns = [
+            r'code:list',
             r'list\s+(?:the\s+)?(?:files|contents)\s+(?:in|of)?\s+(?:the\s+)?(?:directory|folder)?',
             r'show\s+(?:the\s+)?(?:files|contents)\s+(?:in|of)?\s+(?:the\s+)?(?:directory|folder)?',
             r'what\s+(?:files|contents)\s+(?:are|do\s+we\s+have)\s+(?:in|of)?\s+(?:the\s+)?(?:directory|folder)?',
@@ -141,6 +180,37 @@ class DirectCommandHandler:
             r'\bdir\b'
         ]
         
+        # Special case for 'code:list'
+        if message.strip() == 'code:list':
+            if self.debug_mode:
+                print("[DIRECT] Handling code:list command (list loaded files)")
+            
+            handler = self.tool_handlers.get('list_loaded_files')
+            if not handler:
+                print("[ERROR] No handler found for list_loaded_files")
+                return False
+                
+            result = await handler.handle_tool_use({
+                "name": "list_loaded_files",
+                "input": {}
+            })
+            
+            if "error" in result:
+                print(f"[ERROR] {result['error']}")
+                return False
+                
+            # Display loaded files
+            if "files" in result and result["files"]:
+                print("\nLoaded files:")
+                for file_info in result["files"]:
+                    print(f"- {file_info['path']} ({file_info.get('lines', '?')} lines)")
+                
+            if "summary" in result:
+                print(f"\n{result['summary']}")
+                
+            return True
+            
+        # Regular directory listing
         is_list_command = False
         for pattern in list_patterns:
             if re.search(pattern, message, re.IGNORECASE):
@@ -178,7 +248,7 @@ class DirectCommandHandler:
         self._display_directory_contents(result, path)
         
         return True
-    
+        
     def _display_directory_contents(self, result, path):
         """Display directory contents in a condensed format."""
         print(f"Contents of {path}:")
@@ -228,7 +298,7 @@ class DirectCommandHandler:
         
         # Display contents
         self._display_directory_contents(result, path)
-    
+
     async def _handle_read_command(self, message: str) -> bool:
         """
         Handle file read commands.
@@ -250,15 +320,41 @@ class DirectCommandHandler:
         ]
         
         filepath = None
-        for pattern in read_patterns:
-            match = re.search(pattern, message, re.IGNORECASE)
-            if match:
-                filepath = match.group(1).strip().strip('"\'')
-                break
+        multiple_files = False
         
-        if not filepath:
+        # Check for explicit code:read: command
+        if message.startswith('code:read:'):
+            # Extract everything after code:read:
+            command_param = message[len('code:read:'):].strip()
+            
+            # Check if it contains commas (multiple files)
+            if ',' in command_param:
+                filepaths = [f.strip() for f in command_param.split(',')]
+                multiple_files = True
+            else:
+                filepath = command_param
+        else:
+            # Try the regular patterns
+            for pattern in read_patterns:
+                match = re.search(pattern, message, re.IGNORECASE)
+                if match:
+                    filepath = match.group(1).strip().strip('"\'')
+                    break
+        
+        if not filepath and not multiple_files:
             return False
         
+        # Handle multiple files case
+        if multiple_files:
+            for file_path in filepaths:
+                await self._read_single_file(file_path)
+            return True
+        
+        # Handle single file case
+        return await self._read_single_file(filepath)
+    
+    async def _read_single_file(self, filepath: str) -> bool:
+        """Read a single file and display its info."""
         if self.debug_mode:
             print(f"[DIRECT] Reading file: {filepath}")
         
@@ -280,9 +376,8 @@ class DirectCommandHandler:
             return False
         
         print(f"Successfully read file: {filepath}")
-        # Only show preview in debug mode
-        if self.debug_mode:
-            content_preview = result['content'][:200] + '...' if len(result['content']) > 200 else result['content']
-            print(f"\nPreview:\n```\n{content_preview}\n```\n")
+        # Show a preview in non-debug mode as well, but keep it shorter
+        content_preview = result['content'][:200] + '...' if len(result['content']) > 200 else result['content']
+        print(f"\nPreview:\n```\n{content_preview}\n```\n")
         
         return True

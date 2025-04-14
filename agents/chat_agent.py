@@ -210,6 +210,23 @@ class ChatAgent:
                                                 tool_name = 'analyze_code'
                                                 if self.debug_mode:
                                                     print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (filepath and analysis_type parameters)")
+                                            # New inference cases for code modification tools
+                                            elif 'filepath' in snapshot and 'original_code' in snapshot and 'new_code' in snapshot:
+                                                tool_name = 'modify_code'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (filepath, original_code, and new_code parameters)")
+                                            elif 'original' in snapshot and 'modified' in snapshot:
+                                                tool_name = 'generate_diff'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (original and modified parameters)")
+                                            elif 'suggestion_text' in snapshot and len(snapshot) == 1:
+                                                tool_name = 'parse_diff_suggestions'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (suggestion_text parameter)")
+                                            elif 'filepath' in snapshot and 'changes' in snapshot:
+                                                tool_name = 'apply_changes'
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔧 Inferred tool: {tool_name} (filepath and changes parameters)")
                                         
                                         # If we have a valid tool name
                                         if tool_name and tool_name in self.tool_handlers:
@@ -344,6 +361,28 @@ class ChatAgent:
                     # Handle direct path inputs for directory changes
                     tool_input = {"path": tool_input.strip()}
                 # Add other tool-specific string input handling as needed
+                elif tool_name == "generate_diff":
+                    # Handle string input as file path for diff
+                    if ":" in tool_input:
+                        # If format is like "old_file:new_file", split it
+                        parts = tool_input.strip().split(":")
+                        if len(parts) == 2:
+                            tool_input = {"original": parts[0], "modified": parts[1]}
+                elif tool_name == "modify_code":
+                    # Try to convert string input to a filepath parameter
+                    tool_input = {"filepath": tool_input.strip(), "original_code": "", "new_code": ""}
+                elif tool_name == "generate_code":
+                    # Handle string input as filepath
+                    tool_input = {"filepath": tool_input.strip(), "code": ""}
+                elif tool_name == "analyze_code":
+                    # Handle string input as filepath with default analysis type
+                    tool_input = {"filepath": tool_input.strip(), "analysis_type": "basic"}
+                elif tool_name == "parse_diff_suggestions":
+                    # Handle string input as suggestion text
+                    tool_input = {"suggestion_text": tool_input.strip()}
+                elif tool_name == "apply_changes":
+                    # Handle string input as filepath
+                    tool_input = {"filepath": tool_input.strip(), "changes": []}
 
         # Special handling for directory-related commands if they got misrouted
         if tool_name == "read_file" and isinstance(tool_input, dict) and "path" in tool_input:
@@ -366,6 +405,38 @@ class ChatAgent:
                             "name": "set_working_directory",
                             "input": {"path": path}
                         })
+
+        # Special handling for code:change: commands that might be misrouted
+        if tool_name == "generate_code" and isinstance(tool_input, dict) and "filepath" in tool_input and "code" in tool_input:
+            # Check if this is a code change command rather than code generation
+            filepath = tool_input["filepath"]
+            code = tool_input["code"]
+            
+            if self.debug_mode:
+                print(f"[DEBUG] Checking if '{filepath}' should be a modify_code call instead")
+            
+            # If file exists, it might be a code modification rather than generation
+            if os.path.exists(self.file_manager._get_absolute_path(filepath)):
+                try:
+                    # Read the file to see if it exists
+                    content = await self.file_manager.read_file(filepath)
+                    
+                    if content.strip() and not tool_input.get("force_create", False):
+                        if self.debug_mode:
+                            print(f"[DEBUG] File exists and has content. This might be a code modification.")
+                            
+                        # Ask user for confirmation before overwriting completely
+                        if "confirm" in tool_input and tool_input["confirm"]:
+                            # This should be handled by the generate_code handler itself
+                            pass
+                        else:
+                            # Try to see if this is a partial modification instead of full replacement
+                            # For now, we'll leave this as generate_code
+                            pass
+                            
+                except Exception:
+                    # If file can't be read, continue with original handler
+                    pass
 
         # Find the appropriate handler
         handler = self.tool_handlers.get(tool_name)

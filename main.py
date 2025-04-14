@@ -235,6 +235,20 @@ async def main():
             if not user_input.strip():
                 continue
         
+            # Check for slash commands first
+            if user_input.startswith('/'):
+                command = user_input[1:].strip()  # Remove the slash
+                print_colored("\nAssistant: ", "green", bold=True)
+                try:
+                    result = await chat_agent._handle_slash_command(command)
+                    # If we get here, it wasn't the /exit command (which calls sys.exit)
+                    print(result)
+                    # Continue to next iteration after handling the command
+                    continue
+                except Exception as e:
+                    print(f"Error handling slash command: {str(e)}")
+                    continue
+        
             # Enable direct command processing
             direct_result = await direct_command_handler.process_command(user_input)
         
