@@ -167,7 +167,7 @@ async def main():
     file_manager = FileManager(conversation_manager)
     
     # Initialize tools
-    file_tools = FileTools(file_manager)
+    file_tools = FileTools(file_manager, debug_mode=args.debug)
     code_tools = CodeTools(file_manager)
     
     # Register tools
@@ -201,10 +201,10 @@ async def main():
     chat_agent = ChatAgent(api_key, config, conversation_manager, file_manager, debug_mode=debug_mode)
     chat_agent.register_tools(all_tools, tool_handlers)
     
+    # Initialize direct command handler
+    direct_command_handler = DirectCommandHandler(file_manager, tool_handlers, conversation_manager)
+    direct_command_handler.set_debug_mode(debug_mode)
     
-    debug_mode = args.debug
-    chat_agent = ChatAgent(api_key, config, conversation_manager, file_manager, debug_mode=debug_mode)
-    chat_agent.register_tools(all_tools, tool_handlers)
     # Application context
     app_context = {
         "config": config,
@@ -264,3 +264,6 @@ async def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())

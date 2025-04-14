@@ -266,14 +266,16 @@ class FileTools:
     Implementation of file tools for use with Claude.
     """
     
-    def __init__(self, file_manager):
+    def __init__(self, file_manager, debug_mode=False):
         """
         Initialize file tools.
         
         Args:
             file_manager: File manager to use for operations
+            debug_mode: Whether to print debug information
         """
         self.file_manager = file_manager
+        self.debug_mode = debug_mode
     
     async def handle_tool_use(self, tool_use: Dict[str, Any]) -> Dict[str, Any]:
         """
