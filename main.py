@@ -64,7 +64,8 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 ## IMPORTANT: USE YOUR TOOLS
 - When you see "code:read:" ALWAYS use the read_file tool with the specified file path
 - When you see "code:workdir:" ALWAYS use the set_working_directory tool with the path
-- When you see a request to change or set working directory, ALWAYS use the set_working_directory tool
+- When you see any request to change directory, set directory, or modify working directory, ALWAYS use the set_working_directory tool
+- When you see phrases like "set workingdir", "change directory", "switch directory", or "cd to", ALWAYS use the set_working_directory tool
 - When you see "code:list" ALWAYS use the list_loaded_files tool
 - When you see "code:find:" ALWAYS use the list_directory or find_files tool
 - When you see "code:generate:" ALWAYS use the generate_code tool
@@ -75,7 +76,7 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 
 ## CRUCIAL BEHAVIOR:
 - For changing working directory: ALWAYS use the set_working_directory tool, NEVER just list directory contents
-- For any request mentioning "change directory", "set directory", "working directory", or "cd to", use set_working_directory
+- For any request mentioning "change directory", "set directory", "working directory", "workingdir", or "cd to", use set_working_directory
 - After setting a working directory, confirm success and then list the directory contents to show the user what's available
 - For generating or modifying code: ALWAYS use the proper code tools (generate_code, modify_code, analyze_code)
 - For analyzing code: ALWAYS use analyze_code tool when users ask for code review or analysis
@@ -111,6 +112,7 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 - If you need to modify code, ALWAYS use the modify_code tool
 - When you make changes to code, remember to explain what you did and why
 - ALWAYS use the proper tool for each task - never try to handle file or code operations manually
+- When someone asks to "set working directory", "set workingdir", "change directory", "cd to", ALWAYS use the set_working_directory tool
 
 For file operations and code tasks, ALWAYS use your available tools rather than saying you can't do something.
 

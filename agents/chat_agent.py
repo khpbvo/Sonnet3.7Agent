@@ -307,6 +307,12 @@ class ChatAgent:
         tool_name = tool_call.get('name')
         tool_input = tool_call.get('input', {})
 
+        # Enhanced debugging for directory-related commands
+        if self.debug_mode and (tool_name == 'set_working_directory' or 
+                                (isinstance(tool_input, str) and ('directory' in tool_input.lower() or 'workingdir' in tool_input.lower()))):
+            print(f"[DEBUG] 🔍 Processing directory-related tool call: {tool_name}")
+            print(f"[DEBUG] 📝 Tool input type: {type(tool_input)} - Content: {tool_input}")
+
         # Ensure tool_input is a dictionary
         if isinstance(tool_input, str):
             try:
@@ -320,6 +326,28 @@ class ChatAgent:
                     # Handle direct path inputs for directory changes
                     tool_input = {"path": tool_input.strip()}
                 # Add other tool-specific string input handling as needed
+
+        # Special handling for directory-related commands if they got misrouted
+        if tool_name == "read_file" and isinstance(tool_input, dict) and "path" in tool_input:
+            path = tool_input["path"]
+            # Check if this is likely a directory path that should be handled by set_working_directory
+            if self.debug_mode:
+                print(f"[DEBUG] Checking if '{path}' is a misrouted directory command")
+        
+            if (path.startswith("/") or path.startswith("C:") or path.startswith("D:")) and not path.endswith((".py", ".txt", ".md", ".json", ".csv")):
+                # This looks like a directory path, not a file path
+                if os.path.isdir(path):
+                    if self.debug_mode:
+                        print(f"[DEBUG] Detected a directory path sent to read_file: {path}")
+                        print(f"[DEBUG] Redirecting to set_working_directory tool")
+                
+                    # Redirect to the set_working_directory tool
+                    handler = self.tool_handlers.get('set_working_directory')
+                    if handler:
+                        return await handler.handle_tool_use({
+                            "name": "set_working_directory",
+                            "input": {"path": path}
+                        })
 
         # Find the appropriate handler
         handler = self.tool_handlers.get(tool_name)

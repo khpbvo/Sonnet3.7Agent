@@ -58,11 +58,11 @@ class DirectCommandHandler:
     
     async def _handle_directory_command(self, message: str) -> bool:
         """
-        Handle directory change commands.
-        
+    Handle directory change commands.
+    
         Args:
             message: User message
-            
+        
         Returns:
             True if command was processed, False otherwise
         """
@@ -76,44 +76,49 @@ class DirectCommandHandler:
             # More general patterns
             r'(?:use|switch\s+to)\s+(?:the\s+)?directory\s+(.+)',
             r'(?:make|set)\s+(.+)\s+(?:as|the)\s+(?:working|current)\s+directory',
-            r'working\s+directory\s+(?:should\s+be|is)\s+(.+)'
+            r'working\s+directory\s+(?:should\s+be|is)\s+(.+)',
+            # Additional patterns to catch more variations
+            r'set\s+(?:the\s+)?workingdir\s+to\s+(.+)',
+            r'change\s+(?:the\s+)?workingdir\s+to\s+(.+)',
+            r'(?:can\s+you|please|could\s+you)?\s+set\s+(?:the\s+)?(?:working\s+directory|workingdir)\s+to\s+(.+)',
+            r'(?:can\s+you|please|could\s+you)?\s+change\s+(?:the\s+)?(?:working\s+directory|workingdir)\s+to\s+(.+)'
         ]
-        
+    
         path = None
         for pattern in directory_patterns:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
                 path = match.group(1).strip().strip('"\'')
                 break
-        
+    
         if not path:
             return False
-        
+    
         if self.debug_mode:
             print(f"[DIRECT] Setting working directory to: {path}")
-        
+    
         # Get the handler
         handler = self.tool_handlers.get('set_working_directory')
         if not handler:
             print("[ERROR] No handler found for set_working_directory")
             return False
-        
+    
         # Execute the tool directly
         result = await handler.handle_tool_use({
             "name": "set_working_directory",
             "input": {"path": path}
         })
-        
+    
         # Print the result
         if "error" in result:
             print(f"[ERROR] {result['error']}")
             return False
-        
+    
         print(f"[SUCCESS] Working directory set to: {path}")
-        
+    
         # Show directory contents
         await self._list_current_directory()
-        
+    
         return True
     
     async def _handle_list_command(self, message: str) -> bool:
