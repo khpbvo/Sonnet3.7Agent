@@ -8,6 +8,9 @@ import os
 import asyncio
 from typing import Dict, List, Any, Optional
 
+# Import terminal utilities
+from utils.terminal_utils import print_status
+
 class DirectCommandHandler:
     """
     Handles commands directly, bypassing Claude's tool calling when needed.
@@ -26,6 +29,25 @@ class DirectCommandHandler:
         self.tool_handlers = tool_handlers
         self.conversation_manager = conversation_manager
         self.debug_mode = False
+    
+    def print_command_status(self, command_type: str, details: str = "") -> None:
+        """
+        Print user-friendly information about the direct command being processed.
+        
+        Args:
+            command_type: Type of command being processed
+            details: Additional details about the command
+        """
+        if command_type == "directory":
+            print_status("📁", f"Processing directory command: {details}", "magenta")
+        elif command_type == "list":
+            print_status("📋", f"Processing list command: {details}", "magenta")
+        elif command_type == "read":
+            print_status("📖", f"Processing file read command: {details}", "magenta")
+        elif command_type == "code":
+            print_status("💻", f"Processing code command: {details}", "magenta")
+        else:
+            print_status("🔄", f"Processing direct command: {details}", "magenta")
     
     def set_debug_mode(self, debug_mode: bool):
         """Set debug mode"""
@@ -132,6 +154,9 @@ class DirectCommandHandler:
         if not path:
             return False
     
+        # Print command status
+        self.print_command_status("directory", f"Changing to {path}")
+    
         if self.debug_mode:
             print(f"[DIRECT] Setting working directory to: {path}")
     
@@ -182,6 +207,9 @@ class DirectCommandHandler:
         
         # Special case for 'code:list'
         if message.strip() == 'code:list':
+            # Print command status
+            self.print_command_status("list", "Listing loaded files")
+            
             if self.debug_mode:
                 print("[DIRECT] Handling code:list command (list loaded files)")
             
@@ -223,6 +251,9 @@ class DirectCommandHandler:
         # Extract path or use current directory
         path_match = re.search(r'(?:in|of)\s+(?:the\s+)?(?:directory|folder)?\s+([^\s,]+)', message, re.IGNORECASE)
         path = path_match.group(1).strip().strip('"\'') if path_match else self.file_manager.get_working_directory()
+        
+        # Print command status
+        self.print_command_status("list", f"Listing directory {path}")
         
         if self.debug_mode:
             print(f"[DIRECT] Listing directory: {path}")
@@ -331,14 +362,20 @@ class DirectCommandHandler:
             if ',' in command_param:
                 filepaths = [f.strip() for f in command_param.split(',')]
                 multiple_files = True
+                # Print command status
+                self.print_command_status("read", f"Reading multiple files: {command_param}")
             else:
                 filepath = command_param
+                # Print command status
+                self.print_command_status("read", f"Reading file: {command_param}")
         else:
             # Try the regular patterns
             for pattern in read_patterns:
                 match = re.search(pattern, message, re.IGNORECASE)
                 if match:
                     filepath = match.group(1).strip().strip('"\'')
+                    # Print command status
+                    self.print_command_status("read", f"Reading file: {filepath}")
                     break
         
         if not filepath and not multiple_files:
@@ -357,6 +394,9 @@ class DirectCommandHandler:
         """Read a single file and display its info."""
         if self.debug_mode:
             print(f"[DIRECT] Reading file: {filepath}")
+        
+        # Print command status
+        self.print_command_status("read", f"Reading file: {filepath}")
         
         # Get the handler
         handler = self.tool_handlers.get('read_file')

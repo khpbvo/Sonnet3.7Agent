@@ -13,6 +13,9 @@ import re
 import json
 import anthropic
 
+# Import terminal utilities
+from utils.terminal_utils import print_status
+
 # Define a simple Tool class without relying on anthropic.types.Tool
 class Tool:
     def __init__(self, name, description, input_schema):
@@ -290,6 +293,9 @@ class FileTools:
         tool_name = tool_use.get('name')
         tool_params = tool_use.get('input', {})
         
+        # Print tool status
+        self._print_tool_status(tool_name, tool_params)
+        
         try:
             if tool_name == 'read_file':
                 return await self._handle_read_file(tool_params)
@@ -313,6 +319,59 @@ class FileTools:
             return {
                 "error": str(e)
             }
+    
+    def _print_tool_status(self, tool_name: str, tool_params: Dict[str, Any]) -> None:
+        """
+        Print user-friendly information about the tool being used.
+        
+        Args:
+            tool_name: Name of the tool being used
+            tool_params: Tool parameters
+        """
+        # Format tool name
+        icon = "🔧"
+        tool_display = f"Using tool: {tool_name}"
+        
+        # Add file information if available
+        filepath = None
+        if isinstance(tool_params, dict):
+            if 'path' in tool_params:
+                filepath = tool_params['path']
+                
+        if filepath:
+            tool_display += f" on '{filepath}'"
+            
+        # Add special handling for specific tools
+        if tool_name == 'set_working_directory':
+            if isinstance(tool_params, dict) and 'path' in tool_params:
+                icon = "📁"
+                tool_display = f"Changing directory to: {tool_params['path']}"
+        elif tool_name == 'read_file':
+            if filepath:
+                icon = "📖"
+                tool_display = f"Reading file: {filepath}"
+        elif tool_name == 'write_file':
+            if filepath:
+                icon = "✏️"
+                tool_display = f"Writing to file: {filepath}"
+        elif tool_name == 'list_directory':
+            if isinstance(tool_params, dict) and 'path' in tool_params:
+                icon = "📋"
+                tool_display = f"Listing directory: {tool_params['path']}"
+        elif tool_name == 'find_files':
+            if isinstance(tool_params, dict) and 'path' in tool_params:
+                pattern = tool_params.get('pattern', '*')
+                icon = "🔎"
+                tool_display = f"Finding files in {tool_params['path']} matching: {pattern}"
+        elif tool_name == 'list_loaded_files':
+            icon = "📚"
+            tool_display = f"Listing all loaded files"
+        elif tool_name == 'generate_diff':
+            icon = "↔️"
+            tool_display = f"Generating diff"
+            
+        # Print the formatted string
+        print_status(icon, tool_display, 'blue')
     
     async def _handle_read_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -357,7 +416,9 @@ class FileTools:
             if not os.path.isfile(absolute_path):
                 return {"error": f"Path is not a file: {path}", "absolute_path": absolute_path}
         
-            content = await self.file_manager.read_file(path)
+            # File exists at absolute_path, so directly read it
+            # Use the file manager's read_file method with the absolute path
+            content = await self.file_manager.read_file(absolute_path)
         
             return {
                 "content": content,

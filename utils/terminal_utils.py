@@ -126,3 +126,15 @@ def create_stream_callback(delay: float = 0.01) -> Callable[[str], None]:
             time.sleep(delay)
     
     return callback
+
+
+def print_status(icon: str, message: str, color: str = 'cyan') -> None:
+    """
+    Print a status message with icon and color.
+    
+    Args:
+        icon: Icon to display at the beginning of the message
+        message: Status message to display
+        color: Color to use (default: cyan)
+    """
+    print_colored(f"{icon} {message}", color, bold=True)

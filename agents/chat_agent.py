@@ -12,6 +12,7 @@ import json
 import re
 
 from config import Config
+from utils.terminal_utils import print_status, print_colored
 
 
 class ChatAgent:
@@ -244,6 +245,9 @@ class ChatAgent:
                                             # Add to tool call history
                                             self.tool_call_history.append(tool_call)
                                             
+                                            # Print tool status (regardless of debug mode)
+                                            self.print_tool_status(tool_name, tool_input)
+                                            
                                             # Execute the tool
                                             if self.debug_mode:
                                                 print(f"[DEBUG] 🛠️ Executing tool: {tool_name}")
@@ -329,6 +333,68 @@ class ChatAgent:
         print("[DEBUG] _send_tool_results is deprecated, tool results should be submitted through the stream")
         return "Tool results were processed."
 
+    def print_tool_status(self, tool_name: str, tool_input: Dict[str, Any]) -> None:
+        """
+        Print user-friendly information about the tool being used.
+        This function is called whenever a tool is used, regardless of debug mode.
+        
+        Args:
+            tool_name: Name of the tool being used
+            tool_input: Tool input parameters
+        """
+        # Format tool name
+        icon = "🔧"
+        tool_display = f"Using tool: {tool_name}"
+        
+        # Add file information if available
+        filepath = None
+        if isinstance(tool_input, dict):
+            if 'path' in tool_input:
+                filepath = tool_input['path']
+            elif 'filepath' in tool_input:
+                filepath = tool_input['filepath']
+                
+        if filepath:
+            tool_display += f" on '{filepath}'"
+            
+        # Add special handling for specific tools
+        if tool_name == 'set_working_directory':
+            if isinstance(tool_input, dict) and 'path' in tool_input:
+                icon = "📁"
+                tool_display = f"Changing directory to: {tool_input['path']}"
+        elif tool_name == 'read_file':
+            if filepath:
+                icon = "📖"
+                tool_display = f"Reading file: {filepath}"
+        elif tool_name == 'write_file':
+            if filepath:
+                icon = "✏️"
+                tool_display = f"Writing to file: {filepath}"
+        elif tool_name == 'generate_code':
+            if filepath:
+                icon = "✨"
+                tool_display = f"Generating code in: {filepath}"
+        elif tool_name == 'modify_code':
+            if filepath:
+                icon = "🔄"
+                tool_display = f"Modifying code in: {filepath}"
+        elif tool_name == 'analyze_code':
+            if filepath:
+                icon = "🔍"
+                tool_display = f"Analyzing code in: {filepath}"
+        elif tool_name == 'list_directory':
+            if isinstance(tool_input, dict) and 'path' in tool_input:
+                icon = "📋"
+                tool_display = f"Listing directory: {tool_input['path']}"
+        elif tool_name == 'find_files':
+            if isinstance(tool_input, dict) and 'path' in tool_input:
+                pattern = tool_input.get('pattern', '*')
+                icon = "🔎"
+                tool_display = f"Finding files in {tool_input['path']} matching: {pattern}"
+        
+        # Print the formatted string
+        print_status(icon, tool_display, 'cyan')
+
     async def _handle_tool_call(self, tool_call):
         """
         Handle a tool call from Claude.
@@ -341,6 +407,9 @@ class ChatAgent:
         """
         tool_name = tool_call.get('name')
         tool_input = tool_call.get('input', {})
+
+        # Always print tool status information
+        self.print_tool_status(tool_name, tool_input)
 
         # Enhanced debugging for directory-related commands
         if self.debug_mode and (tool_name == 'set_working_directory' or 

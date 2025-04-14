@@ -15,6 +15,9 @@ import anthropic
 # Import the Tool class from file_tools to reuse the implementation
 from tools.file_tools import Tool, ToolUseBlock
 
+# Import terminal utilities
+from utils.terminal_utils import print_status
+
 def register_code_tools() -> List[Tool]:
     """
     Register Claude-compatible code-related tools.
@@ -232,6 +235,9 @@ class CodeTools:
         tool_name = tool_use.get('name')
         tool_params = tool_use.get('input', {})
         
+        # Print tool status
+        self._print_tool_status(tool_name, tool_params)
+        
         try:
             if tool_name == 'generate_code':
                 return await self._handle_generate_code(tool_params)
@@ -249,6 +255,51 @@ class CodeTools:
             return {
                 "error": str(e)
             }
+    
+    def _print_tool_status(self, tool_name: str, tool_params: Dict[str, Any]) -> None:
+        """
+        Print user-friendly information about the tool being used.
+        
+        Args:
+            tool_name: Name of the tool being used
+            tool_params: Tool parameters
+        """
+        # Format tool name
+        icon = "🔧"
+        tool_display = f"Using tool: {tool_name}"
+        
+        # Add file information if available
+        filepath = None
+        if isinstance(tool_params, dict):
+            if 'filepath' in tool_params:
+                filepath = tool_params['filepath']
+                
+        if filepath:
+            tool_display += f" on '{filepath}'"
+            
+        # Add special handling for specific tools
+        if tool_name == 'generate_code':
+            if filepath:
+                icon = "✨"
+                tool_display = f"Generating code in: {filepath}"
+        elif tool_name == 'modify_code':
+            if filepath:
+                icon = "🔄"
+                tool_display = f"Modifying code in: {filepath}"
+        elif tool_name == 'analyze_code':
+            if filepath:
+                icon = "🔍"
+                tool_display = f"Analyzing code in: {filepath}"
+        elif tool_name == 'parse_diff_suggestions':
+            icon = "📝"
+            tool_display = f"Parsing diff suggestions"
+        elif tool_name == 'apply_changes':
+            if filepath:
+                icon = "🛠️"
+                tool_display = f"Applying changes to: {filepath}"
+            
+        # Print the formatted string
+        print_status(icon, tool_display, 'green')
     
     async def _handle_generate_code(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
