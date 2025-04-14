@@ -23,6 +23,7 @@ from agents.chat_agent import ChatAgent
 from tools.file_tools import FileTools, register_file_tools, Tool
 from tools.code_tools import CodeTools, register_code_tools
 from direct_command_handler import DirectCommandHandler
+from tools.tool_chain_manager import ToolChainManager  # Add the import for ToolChainManager
 
 # Import utilities
 from utils.terminal_utils import get_multiline_input, print_colored, create_stream_callback
@@ -60,6 +61,14 @@ async def setup_system_message(app_context: Dict[str, Any]) -> None:
 - When the user asks to perform these operations, ALWAYS use the appropriate tool
 - ALWAYS respond to the user with the results of your tool operations
 - When a file is read, make sure to remember its contents for future reference
+
+## TOOL CHAINING
+- You can now handle multi-step operations through automatic tool chaining
+- Common chains include:
+  - File modification: First read a file, then modify its contents
+  - Code analysis: First read a file, then perform analysis
+  - Directory navigation: First set working directory, then list its contents
+  - File search and read: First find files matching a pattern, then read them
 
 ## IMPORTANT: USE YOUR TOOLS
 - When you see "code:read:" ALWAYS use the read_file tool with the specified file path
@@ -211,6 +220,10 @@ async def main():
     direct_command_handler = DirectCommandHandler(file_manager, tool_handlers, conversation_manager)
     direct_command_handler.set_debug_mode(debug_mode)
     
+    # Initialize tool chain manager - NEW
+    tool_chain_manager = ToolChainManager(tool_handlers, file_manager, debug_mode=debug_mode)
+    tool_chain_manager.set_debug_mode(debug_mode)
+    
     # Application context
     app_context = {
         "config": config,
@@ -218,7 +231,8 @@ async def main():
         "file_manager": file_manager,
         "chat_agent": chat_agent,
         "file_tools": file_tools,
-        "code_tools": code_tools
+        "code_tools": code_tools,
+        "tool_chain_manager": tool_chain_manager  # Add to context
     }
     
     # Setup initial system message
@@ -229,6 +243,7 @@ async def main():
     print_colored("Type /help for available commands or /exit to quit", "blue")
     print_colored("Type 'END' on a new line to finish multi-line input", "blue")
     print_colored(f"Debug mode is {'enabled' if debug_mode else 'disabled'} - use /debug to toggle", "blue")
+    print_colored("Tool chaining is enabled - complex operations will be handled automatically", "blue")  # New line
     print()
     
     # Main loop
@@ -252,24 +267,52 @@ async def main():
                 except Exception as e:
                     print(f"Error handling slash command: {str(e)}")
                     continue
-        
-            # Enable direct command processing
-            direct_result = await direct_command_handler.process_command(user_input)
-        
-            if direct_result:
-                print_colored("\nAssistant: ", "green", bold=True)
-                print(f"I've processed your command directly: {direct_result}")
             
+            # NEW: Try to handle with tool chain manager
+            chain_result = await tool_chain_manager.identify_and_execute_chain(user_input)
+            
+            if chain_result:
+                print_colored("\nAssistant: ", "green", bold=True)
+                print(f"I've processed your request using a tool chain: {chain_result.get('chain_type')}")
+                
+                # Add additional information based on chain type
+                if chain_result.get('chain_type') == 'directory_navigation':
+                    if 'listing_result' in chain_result and 'files' in chain_result['listing_result']:
+                        files = chain_result['listing_result']['files']
+                        dirs = chain_result['listing_result']['directories']
+                        print(f"\nChanged to directory: {chain_result.get('path')}")
+                        print(f"Found {len(files)} files and {len(dirs)} directories")
+                
+                elif chain_result.get('chain_type') == 'file_search_and_read':
+                    if 'read_result' in chain_result and 'content' in chain_result['read_result']:
+                        content = chain_result['read_result']['content']
+                        filepath = chain_result.get('read_filepath')
+                        print(f"\nFound and read file: {filepath}")
+                        print(f"Preview: {content[:200]}..." if len(content) > 200 else f"Preview: {content}")
+                
                 # Still send a version to Claude to maintain conversation context
                 callback = create_stream_callback(config.typing_simulation_delay)
                 print_colored("\nAdditional response from Claude: ", "cyan")
                 await chat_agent.send_message(user_input, callback)
-            else:
-                # Create streaming callback
-                callback = create_stream_callback(config.typing_simulation_delay)
+                
+            # Try direct command processing if chain not identified
+            elif not chain_result:
+                direct_result = await direct_command_handler.process_command(user_input)
             
-                print_colored("\nAssistant: ", "green", bold=True)
-                await chat_agent.send_message(user_input, callback)
+                if direct_result:
+                    print_colored("\nAssistant: ", "green", bold=True)
+                    print(f"I've processed your command directly: {direct_result}")
+                
+                    # Still send a version to Claude to maintain conversation context
+                    callback = create_stream_callback(config.typing_simulation_delay)
+                    print_colored("\nAdditional response from Claude: ", "cyan")
+                    await chat_agent.send_message(user_input, callback)
+                else:
+                    # Create streaming callback
+                    callback = create_stream_callback(config.typing_simulation_delay)
+                
+                    print_colored("\nAssistant: ", "green", bold=True)
+                    await chat_agent.send_message(user_input, callback)
         
             # Show token usage if it's high
             token_percentage = conversation_manager.get_token_percentage()

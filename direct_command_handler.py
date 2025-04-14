@@ -16,7 +16,7 @@ class DirectCommandHandler:
     Handles commands directly, bypassing Claude's tool calling when needed.
     """
     
-    def __init__(self, file_manager, tool_handlers, conversation_manager):
+    def __init__(self, file_manager, tool_handlers, conversation_manager, tool_chain_manager=None):
         """
         Initialize the direct command handler.
         
@@ -24,10 +24,12 @@ class DirectCommandHandler:
             file_manager: File manager instance
             tool_handlers: Dictionary of tool handlers
             conversation_manager: Conversation manager instance
+            tool_chain_manager: Optional tool chain manager instance
         """
         self.file_manager = file_manager
         self.tool_handlers = tool_handlers
         self.conversation_manager = conversation_manager
+        self.tool_chain_manager = tool_chain_manager
         self.debug_mode = False
     
     def print_command_status(self, command_type: str, details: str = "") -> None:
@@ -46,12 +48,18 @@ class DirectCommandHandler:
             print_status("📖", f"Processing file read command: {details}", "magenta")
         elif command_type == "code":
             print_status("💻", f"Processing code command: {details}", "magenta")
+        elif command_type == "chain":
+            print_status("🔗", f"Processing tool chain: {details}", "magenta")
         else:
             print_status("🔄", f"Processing direct command: {details}", "magenta")
     
     def set_debug_mode(self, debug_mode: bool):
         """Set debug mode"""
         self.debug_mode = debug_mode
+    
+    def set_tool_chain_manager(self, tool_chain_manager):
+        """Set the tool chain manager"""
+        self.tool_chain_manager = tool_chain_manager
     
     async def process_command(self, message: str) -> Optional[str]:
         """
@@ -66,6 +74,13 @@ class DirectCommandHandler:
         # Check for slash commands - these are handled by the main loop now
         if message.startswith('/'):
             return None
+        
+        # NEW: Try to process with tool chain manager if available
+        if self.tool_chain_manager:
+            chain_result = await self.tool_chain_manager.identify_and_execute_chain(message)
+            if chain_result:
+                self.print_command_status("chain", f"{chain_result.get('chain_type', 'Unknown chain')}")
+                return f"Tool chain executed: {chain_result.get('chain_type')}"
             
         # Check for directory commands
         if await self._handle_directory_command(message):
@@ -179,8 +194,19 @@ class DirectCommandHandler:
     
         print(f"[SUCCESS] Working directory set to: {path}")
     
-        # Show directory contents (condensed)
-        await self._list_current_directory(condensed=True)
+        # NEW: Always chain with list_directory to show directory contents
+        list_handler = self.tool_handlers.get('list_directory')
+        if list_handler:
+            list_result = await list_handler.handle_tool_use({
+                "name": "list_directory",
+                "input": {"path": path}
+            })
+            
+            # Display directory contents in a condensed format
+            self._display_directory_contents(list_result, path)
+        else:
+            # Fallback to the old method if the list_directory handler isn't available
+            await self._list_current_directory(condensed=True)
     
         return True
 
@@ -352,6 +378,7 @@ class DirectCommandHandler:
         
         filepath = None
         multiple_files = False
+        filepaths = []
         
         # Check for explicit code:read: command
         if message.startswith('code:read:'):
@@ -420,4 +447,23 @@ class DirectCommandHandler:
         content_preview = result['content'][:200] + '...' if len(result['content']) > 200 else result['content']
         print(f"\nPreview:\n```\n{content_preview}\n```\n")
         
+        # NEW: Check if we should automatically analyze Python files
+        if filepath.endswith('.py'):
+            analyze_handler = self.tool_handlers.get('analyze_code')
+            if analyze_handler:
+                print_status("🔗", f"Auto-analyzing Python file: {filepath}", "magenta")
+                
+                analyze_result = await analyze_handler.handle_tool_use({
+                    "name": "analyze_code",
+                    "input": {
+                        "filepath": filepath,
+                        "analysis_type": "basic"
+                    }
+                })
+                
+                if "error" not in analyze_result:
+                    print(f"\nBasic code analysis:")
+                    print(f"- Lines: {analyze_result.get('line_count', '?')}")
+                    print(f"- Size: {analyze_result.get('size_bytes', '?')} bytes")
+                
         return True

@@ -1,6 +1,6 @@
 """
 Enhanced chat agent that handles interactions with Claude API,
-including command recognition and tool calling.
+including command recognition, tool calling, and tool chaining.
 """
 
 import os
@@ -44,6 +44,7 @@ class ChatAgent:
         self.tool_handlers = {}
         self.debug_mode = debug_mode
         self.tool_call_history = []
+        self.pending_tool_chains = []  # Track pending tool chains
         
     def register_tools(self, tools, tool_handlers):
         """
@@ -63,7 +64,7 @@ class ChatAgent:
 
     """
     This update focuses on the stream response handling in send_message to ensure
-    tool execution works correctly.
+    tool execution works correctly and supports tool chaining.
     """
 
     async def send_message(
@@ -248,6 +249,9 @@ class ChatAgent:
                                             # Print tool status (regardless of debug mode)
                                             self.print_tool_status(tool_name, tool_input)
                                             
+                                            # NEW: Check for potential tool chaining
+                                            next_tool = self._check_for_tool_chain(tool_name, tool_input, complete_response)
+                                            
                                             # Execute the tool
                                             if self.debug_mode:
                                                 print(f"[DEBUG] 🛠️ Executing tool: {tool_name}")
@@ -271,6 +275,19 @@ class ChatAgent:
                                                 stream_callback(result_text)
                                                 complete_response += result_text
                                             
+                                            # NEW: Execute the next tool in the chain if needed
+                                            if next_tool:
+                                                if self.debug_mode:
+                                                    print(f"[DEBUG] 🔗 Chaining to next tool: {next_tool['name']}")
+                                                
+                                                next_result = await self._handle_tool_call(next_tool)
+                                                
+                                                # Add chained tool result to response
+                                                if self.debug_mode:
+                                                    chain_result_text = f"\n\nChained Tool: {next_tool['name']}\nResult: {json.dumps(next_result, indent=2)}\n"
+                                                    stream_callback(chain_result_text)
+                                                    complete_response += chain_result_text
+                                            
                                             # Submit tool output back to Claude
                                             try:
                                                 # Don't try to submit directly as this SDK version doesn't support it
@@ -283,6 +300,14 @@ class ChatAgent:
                                                     f"Tool '{tool_name}' was called with input: {json.dumps(tool_input)} " +
                                                     f"and returned result: {json.dumps(result)}"
                                                 )
+                                                
+                                                # Add chained tool result to context if applicable
+                                                if next_tool:
+                                                    self.conversation_manager.add_message(
+                                                        "system",
+                                                        f"Chained tool '{next_tool['name']}' was called automatically with input: {json.dumps(next_tool['input'])} " +
+                                                        f"and returned result: {json.dumps(next_result)}"
+                                                    )
                                             except Exception as e:
                                                 if self.debug_mode:
                                                     print(f"[DEBUG] ❌ Error handling tool result: {str(e)}")
@@ -324,76 +349,50 @@ class ChatAgent:
             traceback.print_exc()
             return f"Error: {str(e)}"
 
-    # This method is no longer needed with the new API
-    async def _send_tool_results(self, tool_results, previous_messages):
+    def _check_for_tool_chain(self, tool_name: str, tool_input: Dict[str, Any], current_response: str) -> Optional[Dict[str, Any]]:
         """
-        This method is deprecated with the latest Anthropic API.
-        Tool results are now submitted directly through the stream.
-        """
-        print("[DEBUG] _send_tool_results is deprecated, tool results should be submitted through the stream")
-        return "Tool results were processed."
-
-    def print_tool_status(self, tool_name: str, tool_input: Dict[str, Any]) -> None:
-        """
-        Print user-friendly information about the tool being used.
-        This function is called whenever a tool is used, regardless of debug mode.
+        Check if a tool call should trigger a chain of tools.
         
         Args:
-            tool_name: Name of the tool being used
-            tool_input: Tool input parameters
-        """
-        # Format tool name
-        icon = "🔧"
-        tool_display = f"Using tool: {tool_name}"
-        
-        # Add file information if available
-        filepath = None
-        if isinstance(tool_input, dict):
-            if 'path' in tool_input:
-                filepath = tool_input['path']
-            elif 'filepath' in tool_input:
-                filepath = tool_input['filepath']
-                
-        if filepath:
-            tool_display += f" on '{filepath}'"
+            tool_name: Name of the current tool
+            tool_input: Input parameters for the current tool
+            current_response: Current response text from Claude
             
-        # Add special handling for specific tools
-        if tool_name == 'set_working_directory':
-            if isinstance(tool_input, dict) and 'path' in tool_input:
-                icon = "📁"
-                tool_display = f"Changing directory to: {tool_input['path']}"
-        elif tool_name == 'read_file':
-            if filepath:
-                icon = "📖"
-                tool_display = f"Reading file: {filepath}"
-        elif tool_name == 'write_file':
-            if filepath:
-                icon = "✏️"
-                tool_display = f"Writing to file: {filepath}"
-        elif tool_name == 'generate_code':
-            if filepath:
-                icon = "✨"
-                tool_display = f"Generating code in: {filepath}"
-        elif tool_name == 'modify_code':
-            if filepath:
-                icon = "🔄"
-                tool_display = f"Modifying code in: {filepath}"
-        elif tool_name == 'analyze_code':
-            if filepath:
-                icon = "🔍"
-                tool_display = f"Analyzing code in: {filepath}"
-        elif tool_name == 'list_directory':
-            if isinstance(tool_input, dict) and 'path' in tool_input:
-                icon = "📋"
-                tool_display = f"Listing directory: {tool_input['path']}"
-        elif tool_name == 'find_files':
-            if isinstance(tool_input, dict) and 'path' in tool_input:
-                pattern = tool_input.get('pattern', '*')
-                icon = "🔎"
-                tool_display = f"Finding files in {tool_input['path']} matching: {pattern}"
+        Returns:
+            Next tool call information or None if no chaining needed
+        """
+        # Check for common chaining patterns
         
-        # Print the formatted string
-        print_status(icon, tool_display, 'cyan')
+        # Pattern 1: Directory navigation should be followed by listing directory
+        if tool_name == 'set_working_directory':
+            path = tool_input.get('path', '.')
+            
+            # Create a chained list_directory call
+            return {
+                "name": "list_directory",
+                "input": {"path": path},
+                "id": f"chain-{len(self.tool_call_history)}"
+            }
+            
+        # Pattern 2: Reading a file for analysis should be followed by analyze_code (if Python file)
+        elif tool_name == 'read_file':
+            path = tool_input.get('path', '')
+            
+            # If it's a Python file and context suggests analysis
+            if path.endswith('.py') and ('analyze' in current_response.lower() or 'review' in current_response.lower()):
+                return {
+                    "name": "analyze_code",
+                    "input": {"filepath": path, "analysis_type": "basic"},
+                    "id": f"chain-{len(self.tool_call_history)}"
+                }
+                
+        # Pattern 3: When finding files, if only one match, read it automatically
+        elif tool_name == 'find_files':
+            # Note: We don't have the result yet, so this isn't practical to implement here
+            # This would need to be handled after we have the result from find_files
+            pass
+                
+        return None
 
     async def _handle_tool_call(self, tool_call):
         """
@@ -452,6 +451,32 @@ class ChatAgent:
                 elif tool_name == "apply_changes":
                     # Handle string input as filepath
                     tool_input = {"filepath": tool_input.strip(), "changes": []}
+
+        # NEW: Special handling for chains that require reading before modification
+        if tool_name == "modify_code" and isinstance(tool_input, dict) and "filepath" in tool_input:
+            filepath = tool_input["filepath"]
+            # Check if we need to read the file first
+            if not self._has_recent_read(filepath):
+                if self.debug_mode:
+                    print(f"[DEBUG] 🔗 Auto-chaining: Need to read {filepath} before modifying")
+                
+                # Read the file first
+                read_handler = self.tool_handlers.get('read_file')
+                if read_handler:
+                    read_result = await read_handler.handle_tool_use({
+                        "name": "read_file",
+                        "input": {"path": filepath}
+                    })
+                    
+                    if "error" not in read_result:
+                        if self.debug_mode:
+                            print(f"[DEBUG] 📄 Auto-read successful, proceeding with modification")
+                        
+                        # Update the original_code if it's empty
+                        if not tool_input.get("original_code") and "content" in read_result:
+                            tool_input["original_code"] = read_result["content"]
+                    else:
+                        return {"error": f"Failed to read file before modification: {read_result['error']}"}
 
         # Special handling for directory-related commands if they got misrouted
         if tool_name == "read_file" and isinstance(tool_input, dict) and "path" in tool_input:
@@ -527,6 +552,19 @@ class ChatAgent:
                 "name": tool_name,
                 "input": tool_input
             })
+            
+            # NEW: Check for follow-up tool chaining based on result
+            next_tool = self._check_for_follow_up_chain(tool_name, tool_input, result)
+            if next_tool:
+                if self.debug_mode:
+                    print(f"[DEBUG] 🔗 Identified follow-up chain tool: {next_tool['name']}")
+                
+                # Execute the follow-up tool
+                follow_up_result = await self._handle_tool_call(next_tool)
+                
+                # Merge results for easier reference
+                result["chained_tool"] = next_tool["name"]
+                result["chained_result"] = follow_up_result
 
             if self.debug_mode:
                 print(f"[DEBUG] 📊 Tool result: {json.dumps(result, indent=2)}")
@@ -540,6 +578,65 @@ class ChatAgent:
                 import traceback
                 traceback.print_exc()
             return {"error": error_msg}
+            
+    def _check_for_follow_up_chain(self, tool_name: str, tool_input: Dict[str, Any], tool_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Check if a tool call result should trigger a follow-up tool.
+        
+        Args:
+            tool_name: Name of the current tool
+            tool_input: Input parameters for the current tool
+            tool_result: Result of the current tool
+            
+        Returns:
+            Next tool call information or None if no chaining needed
+        """
+        # Check for result-based chaining patterns
+        
+        # Pattern 1: After find_files, if one match, read it
+        if tool_name == 'find_files' and 'matches' in tool_result and len(tool_result['matches']) == 1:
+            filepath = tool_result['matches'][0].get('path')
+            
+            if filepath:
+                return {
+                    "name": "read_file",
+                    "input": {"path": filepath},
+                    "id": f"follow-{len(self.tool_call_history)}"
+                }
+                
+        # Pattern 2: After successful parse_diff_suggestions, apply the changes
+        elif tool_name == 'parse_diff_suggestions' and 'changes' in tool_result and tool_result.get('count', 0) > 0:
+            # Need to know what file to apply to - not easily available from just the parse result
+            # This is where a more sophisticated planner would be useful
+            pass
+            
+        # Add more follow-up patterns as needed
+                
+        return None
+    
+    def _has_recent_read(self, filepath: str) -> bool:
+        """
+        Check if a file has been read recently in the tool call history.
+        
+        Args:
+            filepath: Path to the file
+            
+        Returns:
+            True if file has been read recently, False otherwise
+        """
+        # Look back through recent tool calls
+        max_lookback = 10  # Only look at the last 10 tool calls
+        recent_tools = self.tool_call_history[-max_lookback:] if len(self.tool_call_history) > max_lookback else self.tool_call_history
+        
+        for tool_call in reversed(recent_tools):  # Start with most recent
+            if tool_call.get('name') == 'read_file':
+                tool_input = tool_call.get('input', {})
+                if isinstance(tool_input, dict) and tool_input.get('path') == filepath:
+                    return True
+                elif isinstance(tool_input, str) and tool_input.strip() == filepath:
+                    return True
+                    
+        return False
 
     async def _handle_slash_command(self, command):
         """
@@ -571,6 +668,8 @@ class ChatAgent:
             return self._show_tools_command()
         elif command == 'history':
             return self._show_tool_history()
+        elif command == 'chains':  # NEW command to show chaining information
+            return self._show_chaining_info()
         else:
             return f"Unknown command: /{command}"
 
@@ -615,6 +714,30 @@ class ChatAgent:
         
         return history_info
     
+    def _show_chaining_info(self):
+        """
+        Show information about tool chaining capabilities.
+        
+        Returns:
+            Tool chaining information
+        """
+        chaining_info = "Tool Chaining Information:\n\n"
+        
+        chaining_info += "Automatic Tool Chains:\n"
+        chaining_info += "1. Directory Navigation Chain\n"
+        chaining_info += "   - When you set a working directory, automatically lists its contents\n\n"
+        
+        chaining_info += "2. File Modification Chain\n"
+        chaining_info += "   - When modifying a file, automatically reads it first if not already read\n\n"
+        
+        chaining_info += "3. File Search and Read Chain\n"
+        chaining_info += "   - When finding a single file matching a pattern, automatically reads it\n\n"
+        
+        chaining_info += "4. Code Analysis Chain\n"
+        chaining_info += "   - When analyzing code in a file, automatically reads it first\n\n"
+        
+        return chaining_info
+    
     async def _show_help_command(self):
         """
         Show help information.
@@ -633,6 +756,7 @@ Slash Commands:
   /debug - Toggle debug mode
   /tools - Show available tools
   /history - Show tool call history
+  /chains - Show information about tool chaining capabilities
 
 Direct Code Commands:
   code:workdir:/path/to/dir - Set working directory
@@ -642,7 +766,7 @@ Direct Code Commands:
   code:find:recursive:directory - Find Python files recursively
   code:list - Show loaded files
   code:generate:/path/to/file.py:prompt - Generate code with a prompt
-  code:change:/path/to/file.py:prompt - Modify existing code
+  code:change:/path/to/file.py:prompt - Modify existing code with prompt
 
 File Commands:
   You can use natural language to:
@@ -657,6 +781,12 @@ Code Analysis Commands:
   - Generate code: "Generate a utility function for parsing JSON" or "Create a class for..."
   - Modify code: "Change the function in main.py to handle errors better"
   - Show differences: "What changes would you suggest for this code?"
+
+Tool Chaining:
+  The assistant can now automatically chain multiple tools for complex operations:
+  - "Modify code in file.py" will first read the file, then apply modifications
+  - "Change directory to /path/to/dir" will set directory and then list contents
+  - "Find and read config files" will search for files and read matching results
 
 System Information:
   - Model: {self.config.model}
@@ -761,3 +891,65 @@ Tool calls: {len(self.tool_call_history)}
             "loaded_files_info": loaded_files_info,
             "model": self.config.model
         }
+        
+    def print_tool_status(self, tool_name: str, tool_input: Dict[str, Any]) -> None:
+        """
+        Print user-friendly information about the tool being used.
+        This function is called whenever a tool is used, regardless of debug mode.
+        
+        Args:
+            tool_name: Name of the tool being used
+            tool_input: Tool input parameters
+        """
+        # Format tool name
+        icon = "🔧"
+        tool_display = f"Using tool: {tool_name}"
+        
+        # Add file information if available
+        filepath = None
+        if isinstance(tool_input, dict):
+            if 'path' in tool_input:
+                filepath = tool_input['path']
+            elif 'filepath' in tool_input:
+                filepath = tool_input['filepath']
+                
+        if filepath:
+            tool_display += f" on '{filepath}'"
+            
+        # Add special handling for specific tools
+        if tool_name == 'set_working_directory':
+            if isinstance(tool_input, dict) and 'path' in tool_input:
+                icon = "📁"
+                tool_display = f"Changing directory to: {tool_input['path']}"
+        elif tool_name == 'read_file':
+            if filepath:
+                icon = "📖"
+                tool_display = f"Reading file: {filepath}"
+        elif tool_name == 'write_file':
+            if filepath:
+                icon = "✏️"
+                tool_display = f"Writing to file: {filepath}"
+        elif tool_name == 'generate_code':
+            if filepath:
+                icon = "✨"
+                tool_display = f"Generating code in: {filepath}"
+        elif tool_name == 'modify_code':
+            if filepath:
+                icon = "🔄"
+                tool_display = f"Modifying code in: {filepath}"
+        elif tool_name == 'analyze_code':
+            if filepath:
+                icon = "🔍"
+                tool_display = f"Analyzing code in: {filepath}"
+        elif tool_name == 'list_directory':
+            if isinstance(tool_input, dict) and 'path' in tool_input:
+                icon = "📋"
+                tool_display = f"Listing directory: {tool_input['path']}"
+        elif tool_name == 'find_files':
+            if isinstance(tool_input, dict) and 'path' in tool_input:
+                pattern = tool_input.get('pattern', '*')
+                icon = "🔎"
+                tool_display = f"Finding files in {tool_input['path']} matching: {pattern}"
+        
+        # Print the formatted string
+        print_status(icon, tool_display, 'cyan')
