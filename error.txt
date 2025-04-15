@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/Users/kevinvanosch/Documents/Sonnet3.7Agent/main.py", line 20, in <module>
+    from agents.chat_agent import ChatAgent
+ImportError: cannot import name 'ChatAgent' from 'agents.chat_agent' (/Users/kevinvanosch/Documents/Sonnet3.7Agent/agents/chat_agent.py)
